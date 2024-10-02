@@ -34,6 +34,9 @@ class KeyboardPlayerPyGame(Player):
         # Initialize database for storing VLAD descriptors of FPV
         self.database = []
 
+        self.lines = []
+        self.number_intersection = 0
+
     def reset(self):
         # Reset the player state
         self.fpv = None
@@ -298,12 +301,25 @@ class KeyboardPlayerPyGame(Player):
         ret, binary = cv2.threshold(gray, 170, 255, cv2.THRESH_BINARY)
         canny = cv2.Canny(binary, 50, 200, None, 3)
         cv2.imwrite("binary.jpg", canny)
-        lines_hor = cv2.HoughLines(canny, 1, np.pi / 180, 100, None, 0, 0)
+        # lines_hor = cv2.HoughLines(canny, 1, np.pi / 180, 100, None, 0, 0)
         lines_ver = cv2.HoughLines(
-            canny, 1, np.pi / 180, 60, min_theta=np.pi, max_theta=np.pi
+            canny, 1, np.pi / 180, 65, min_theta=np.pi, max_theta=np.pi
         )
-        lines = np.vstack((lines_hor, lines_ver))
-        self.plot_lines(lines)
+
+        # print(lines_hor)
+        if not lines_ver is None:
+
+            # lines = np.vstack((lines_hor, lines_ver))
+            if len(self.lines) == 0:
+
+                self.number_intersection += 1
+                print("new intersection: ", self.number_intersection)
+            self.plot_lines(lines_ver)
+            self.lines = lines_ver
+        else:
+            if len(self.lines) > 0:
+                print("left intersection")
+            self.lines = []
 
     def plot_lines(self, lines):
         for r_theta in lines:
@@ -317,8 +333,8 @@ class KeyboardPlayerPyGame(Player):
             y1 = int(y0 + 1000 * (a))
             x2 = int(x0 - 1000 * (-b))
             y2 = int(y0 - 1000 * (a))
-            cv2.line(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
-        cv2.imwrite("linesDetected.jpg", img)
+            cv2.line(self.fpv, (x1, y1), (x2, y2), (0, 0, 255), 2)
+        cv2.imwrite("linesDetected.jpg", self.fpv)
 
     def display_next_best_view(self):
         """
@@ -331,7 +347,7 @@ class KeyboardPlayerPyGame(Player):
         # Get the neighbor of current FPV
         # In other words, get the image from the database that closely matches current FPV
         index = self.get_neighbor(self.fpv)
-        self.get_lines()
+
         # Display the image 5 frames ahead of the neighbor, so that next best view is not exactly same as current FPV
         # self.display_img_from_id(index + 5, f"Next Best View")
         # Display the next best view id along with the goal id to understand how close/far we are from the goal
@@ -399,7 +415,7 @@ class KeyboardPlayerPyGame(Player):
                 # If 'q' key is pressed, then display the next best view based on the current FPV
                 if keys[pygame.K_q]:
                     self.display_next_best_view()
-
+            self.get_lines()
         # Display the first-person view image on the pygame screen
         rgb = convert_opencv_img_to_pygame(fpv)
         self.screen.blit(rgb, (0, 0))
