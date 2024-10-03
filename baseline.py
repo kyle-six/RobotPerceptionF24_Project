@@ -2,12 +2,15 @@
 from vis_nav_game import Player, Action, Phase
 import pygame
 import cv2
-
+from filter_classifier import compute_features_from_colored_images
+from graph import Node
 import numpy as np
 import os
 import pickle
 from sklearn.cluster import KMeans
 from sklearn.neighbors import BallTree
+import networkx as nx
+import matplotlib.pyplot as plt
 
 
 # Define a class for a player controlled by keyboard input using pygame
@@ -33,6 +36,10 @@ class KeyboardPlayerPyGame(Player):
         self.codebook = pickle.load(open("codebook.pkl", "rb"))
         # Initialize database for storing VLAD descriptors of FPV
         self.database = []
+
+        self.node_database = []
+        self.graph = nx.Graph()
+        self.previous_node_id = -1
 
         self.lines = []
         self.number_intersection = 0
@@ -179,6 +186,7 @@ class KeyboardPlayerPyGame(Player):
         Compute SIFT features for images in the data directory
         """
         length = len(os.listdir(self.save_dir))
+        print(length)
         sift_descriptors = list()
         for i in range(length):
             path = str(i) + ".jpg"
@@ -295,6 +303,58 @@ class KeyboardPlayerPyGame(Player):
         super(KeyboardPlayerPyGame, self).pre_navigation()
         self.pre_nav_compute()
 
+    def compute_features_from_images(self):
+        with open("colored_texture_balltree.pkl", "rb") as f:
+            tree = pickle.load(f)
+            img = self.fpv
+            img = np.array(img)  # Convert to numpy array
+            sizeX = img.shape[1]
+            sizeY = img.shape[0]
+
+            nRows = 10
+            mCols = 15
+            found = set()
+            for i in range(0, nRows):
+                for j in range(0, mCols):
+                    roi = img[
+                        int(i * sizeY / nRows) : int(i * sizeY / nRows + sizeY / nRows),
+                        int(j * sizeX / mCols) : int(j * sizeX / mCols + sizeX / mCols),
+                    ]
+                    features = compute_features_from_colored_images("asf", roi)
+                    distances, indices = tree.query(features, k=1)
+                    if distances[0][0] < 7:
+                        found.add(indices[0][0])
+            return found
+
+    def merge_node(self, node_match):
+        self.graph.add_edge(self.previous_node_id, node_match.id, weight=1)
+        self.previous_node_id = node_match.id
+
+    def add_node_to_graph(self, node):
+        self.node_database.append(node)
+        self.graph.add_node(Node, label="Node " + str(self.number_intersection))
+        if not self.previous_node_id == -1:
+            self.graph.add_edge(self.previous_node_id, node.id, weight=1)
+        print("new Node: ", self.number_intersection)
+        self.number_intersection += 1
+        if self.number_intersection % 10 == 0:
+            self.plot_graph()
+
+    def plot_graph(self):
+        pos = nx.spring_layout(self.graph)
+        nx.draw(
+            self.graph,
+            pos,
+            with_labels=True,
+            node_color="lightblue",
+            node_size=200,
+            font_size=12,
+        )
+        edge_labels = nx.get_edge_attributes(self.graph, "weight")
+        nx.draw_networkx_edge_labels(self.graph, pos, edge_labels=edge_labels)
+        plt.savefig("graph_plot.png", format="PNG")
+        plt.clf()
+
     def get_lines(self):
         img = self.fpv
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -312,8 +372,21 @@ class KeyboardPlayerPyGame(Player):
             # lines = np.vstack((lines_hor, lines_ver))
             if len(self.lines) == 0:
 
-                self.number_intersection += 1
-                print("new intersection: ", self.number_intersection)
+                found_match = False
+                new_node = Node(
+                    self.compute_features_from_images(),
+                    self.number_intersection,
+                )
+
+                for node in self.node_database:
+                    if new_node.similarity(node) > 40:
+                        found_match = True
+                        print("Node exists already")
+                        self.merge_node(node)
+                        break
+                if not found_match:
+                    self.add_node_to_graph(new_node)
+
             self.plot_lines(lines_ver)
             self.lines = lines_ver
         else:
