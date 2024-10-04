@@ -2,7 +2,9 @@
 from vis_nav_game import Player, Action, Phase
 import pygame
 import cv2
-from filter_classifier import compute_features_from_colored_images
+from RobotPerceptionF24_Project.texture_classifier import (
+    compute_features_from_colored_images,
+)
 from graph import Node
 import numpy as np
 import os
