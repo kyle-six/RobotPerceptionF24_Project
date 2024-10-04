@@ -324,6 +324,15 @@ class KeyboardPlayerPyGame(Player):
                     distances, indices = tree.query(features, k=1)
                     if distances[0][0] < 7:
                         found.add(indices[0][0])
+                        cv2.putText(
+                            img,
+                            str(indices[0][0]),
+                            (int(j * sizeX / mCols), int(i * sizeY / nRows)),
+                            cv2.FONT_ITALIC,
+                            0.3,
+                            (0, 255, 0),
+                            1,
+                        )
             return found
 
     def merge_node(self, node_match):
