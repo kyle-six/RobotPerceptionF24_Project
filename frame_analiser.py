@@ -4,7 +4,7 @@ from texture_classifier import TextureClassifier
 
 
 class PlotUtils:
-    def plot_lines(self, lines, img, write=False):
+    def plot_lines(self, lines, img, write=True):
         for r_theta in lines:
             arr = np.array(r_theta[0], dtype=np.float64)
             r, theta = arr
@@ -21,14 +21,17 @@ class PlotUtils:
             cv2.imwrite("data/out/linesDetected.jpg", img)
 
     def plot_rectangles(self, rectangles, img, write=False):
-        for i in range(len(rectangles) - 1):
-            start = tuple(rectangles[i][0])
-            end = tuple(rectangles[i + 1][0])
-            cv2.line(img, start, end, (0, 0, 255), 2)
+        for rect in rectangles:
+            for i in range(len(rect) - 1):
+                start = tuple(rect[i])
+                end = tuple(rect[i + 1])
+                cv2.line(img, start, end, (0, 0, 255), 2)
 
-        start = tuple(rectangles[-1][0])
-        end = tuple(rectangles[0][0])
-        cv2.line(img, start, end, (0, 0, 255), 2)
+            start = tuple(rect[-1])
+            end = tuple(rect[0])
+            cv2.line(img, start, end, (0, 0, 255), 2)
+        if write:
+            cv2.imwrite("data/out/rectanglesDetected.jpg", img)
 
 
 class FrameAnaliser:
@@ -103,7 +106,7 @@ class FrameAnaliser:
         seperated_walls_binary = self.seperate_white_walls(binary)
         rectangles = self.find_big_rectangles(seperated_walls_binary)
         wall_images = self.extract_wall_images(rectangles, img)
-        self.plotting.plot_rectangles(rectangles, img)
+        self.plotting.plot_rectangles(rectangles, img, write=True)
         textures = set()
         for wall_img in wall_images:
             textures = textures.union(
@@ -113,5 +116,5 @@ class FrameAnaliser:
 
 
 frame_analiser = FrameAnaliser()
-img = cv2.imread("data/images/43.jpg")
+img = cv2.imread("data/images/90.jpg")
 print(frame_analiser.find_textures_in_image(img))
