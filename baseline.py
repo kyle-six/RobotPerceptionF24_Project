@@ -2,9 +2,8 @@
 from vis_nav_game import Player, Action, Phase
 import pygame
 import cv2
-from RobotPerceptionF24_Project.texture_classifier import (
-    compute_features_from_colored_images,
-)
+from frame_analiser import FrameAnaliser
+
 from graph import Node
 import numpy as np
 import os
@@ -45,6 +44,9 @@ class KeyboardPlayerPyGame(Player):
 
         self.lines = []
         self.number_intersection = 0
+
+        self.frame_analiser = FrameAnaliser()
+        self.current_textures = set()
 
     def reset(self):
         # Reset the player state
@@ -305,40 +307,9 @@ class KeyboardPlayerPyGame(Player):
         super(KeyboardPlayerPyGame, self).pre_navigation()
         self.pre_nav_compute()
 
-    def compute_features_from_images(self):
-        with open("colored_texture_balltree.pkl", "rb") as f:
-            tree = pickle.load(f)
-            img = self.fpv
-            img = np.array(img)  # Convert to numpy array
-            sizeX = img.shape[1]
-            sizeY = img.shape[0]
-
-            nRows = 10
-            mCols = 15
-            found = set()
-            for i in range(0, nRows):
-                for j in range(0, mCols):
-                    roi = img[
-                        int(i * sizeY / nRows) : int(i * sizeY / nRows + sizeY / nRows),
-                        int(j * sizeX / mCols) : int(j * sizeX / mCols + sizeX / mCols),
-                    ]
-                    features = compute_features_from_colored_images("asf", roi)
-                    distances, indices = tree.query(features, k=1)
-                    if distances[0][0] < 7:
-                        found.add(indices[0][0])
-                        cv2.putText(
-                            img,
-                            str(indices[0][0]),
-                            (int(j * sizeX / mCols), int(i * sizeY / nRows)),
-                            cv2.FONT_ITALIC,
-                            0.3,
-                            (0, 255, 0),
-                            1,
-                        )
-            return found
-
-    def merge_node(self, node_match):
+    def merge_node(self, node_match, textures):
         self.graph.add_edge(self.previous_node_id, node_match.id, weight=1)
+        print(self.graph.nodes[node_match.id])
         self.previous_node_id = node_match.id
 
     def add_node_to_graph(self, node):
@@ -379,30 +350,34 @@ class KeyboardPlayerPyGame(Player):
 
         # print(lines_hor)
         if not lines_ver is None:
+            tex = self.frame_analiser.find_textures_in_image(self.fpv)
+            self.current_textures = self.current_textures.union(tex)
 
             # lines = np.vstack((lines_hor, lines_ver))
             if len(self.lines) == 0:
-
-                found_match = False
-                new_node = Node(
-                    self.compute_features_from_images(),
-                    self.number_intersection,
-                )
-
-                for node in self.node_database:
-                    if new_node.similarity(node) > 40:
-                        found_match = True
-                        print("Node exists already")
-                        self.merge_node(node)
-                        break
-                if not found_match:
-                    self.add_node_to_graph(new_node)
+                print("new intersection")
 
             self.plot_lines(lines_ver)
             self.lines = lines_ver
         else:
             if len(self.lines) > 0:
                 print("left intersection")
+                print("textures: ", self.current_textures)
+                found_match = False
+                new_node = Node(
+                    self.current_textures,
+                    self.number_intersection,
+                )
+
+                for node in self.node_database:
+                    if new_node.textures_in_common(node) > 5:
+                        found_match = True
+                        print("Node exists already")
+                        self.merge_node(node, self.current_textures)
+                        break
+                if not found_match:
+                    self.add_node_to_graph(new_node)
+            self.current_textures = set()
             self.lines = []
 
     def plot_lines(self, lines):

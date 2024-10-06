@@ -39,7 +39,7 @@ class FrameAnaliser:
         self.plotting = PlotUtils()
         self.texture_classifier = TextureClassifier()
 
-    def perspective_transform(self, image, rect):
+    def extract_wall(self, image, rect, perspective_transform=False):
         sum_of_points = rect.sum(axis=1)
         top_left = rect[np.argmin(sum_of_points)]
         bottom_right = rect[np.argmax(sum_of_points)]
@@ -47,23 +47,34 @@ class FrameAnaliser:
         top_right = rect[np.argmin(diff_of_points)]
         bottom_left = rect[np.argmax(diff_of_points)]
         rect_n = (top_left, bottom_left, bottom_right, top_right)
-        width = max(
-            np.linalg.norm(top_right - top_left),
-            np.linalg.norm(bottom_right - bottom_left),
-        )
-        height = max(
-            np.linalg.norm(bottom_right - top_right),
-            np.linalg.norm(bottom_left - top_left),
-        )
-        dst_points = np.array(
-            [[0, 0], [0, height - 1], [width - 1, height - 1], [width - 1, 0]],
-            dtype="float32",
-        )
-        matrix = cv2.getPerspectiveTransform(
-            np.array(rect_n, dtype="float32"), dst_points
-        )
-        transformed = cv2.warpPerspective(image, matrix, (int(width), int(height)))
-        return transformed
+
+        if perspective_transform:
+            width = max(
+                np.linalg.norm(top_right - top_left),
+                np.linalg.norm(bottom_right - bottom_left),
+            )
+            height = max(
+                np.linalg.norm(bottom_right - top_right),
+                np.linalg.norm(bottom_left - top_left),
+            )
+            dst_points = np.array(
+                [[0, 0], [0, height - 1], [width - 1, height - 1], [width - 1, 0]],
+                dtype="float32",
+            )
+            matrix = cv2.getPerspectiveTransform(
+                np.array(rect_n, dtype="float32"), dst_points
+            )
+            transformed = cv2.warpPerspective(image, matrix, (int(width), int(height)))
+            return transformed
+        else:
+            x_min = max(0, int(min(rect[:, 0])))  # leftmost x-coordinate
+            x_max = min(image.shape[1], int(max(rect[:, 0])))  # rightmost x-coordinate
+            y_min = max(0, int(min(rect[:, 1])))  # topmost y-coordinate
+            y_max = min(image.shape[0], int(max(rect[:, 1])))  # bottommost y-coordinate
+
+            # Crop the image to the bounding box
+            cropped_image = image[y_min:y_max, x_min:x_max]
+            return cropped_image
 
     def white_wall_black_floor(self, img):
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -90,14 +101,21 @@ class FrameAnaliser:
         for cnt in contours:
             epsilon = 0.05 * cv2.arcLength(cnt, True)
             approx = cv2.approxPolyDP(cnt, epsilon, True)
-            if abs(approx[0][0][1] - approx[1][0][1]) > 20 and len(approx) == 4:
-                big_rectangles.append(np.array([(a[0][0], a[0][1]) for a in approx]))
+            try:
+                if abs(approx[0][0][1] - approx[1][0][1]) > 20 and len(approx) == 4:
+                    big_rectangles.append(
+                        np.array([(a[0][0], a[0][1]) for a in approx])
+                    )
+            except IndexError:
+                pass
         return big_rectangles
 
-    def extract_wall_images(self, enclosing_rectangles, img):
+    def extract_wall_images(
+        self, enclosing_rectangles, img, perspective_transform=False
+    ):
         wall_images = []
         for enc_rect in enclosing_rectangles:
-            wall_images.append(self.perspective_transform(img, enc_rect))
+            wall_images.append(self.extract_wall(img, enc_rect))
         return wall_images
 
     def find_textures_in_image(self, img):
@@ -106,15 +124,17 @@ class FrameAnaliser:
         seperated_walls_binary = self.seperate_white_walls(binary)
         rectangles = self.find_big_rectangles(seperated_walls_binary)
         wall_images = self.extract_wall_images(rectangles, img)
-        self.plotting.plot_rectangles(rectangles, img, write=True)
+        # self.plotting.plot_rectangles(rectangles, img, write=True)
         textures = set()
         for wall_img in wall_images:
             textures = textures.union(
-                self.texture_classifier.find_textures_on_wall(wall_img, plot=True)
+                self.texture_classifier.find_textures_on_wall_vlad(wall_img, plot=False)
             )
         return textures
 
 
-frame_analiser = FrameAnaliser()
-img = cv2.imread("data/images/90.jpg")
-print(frame_analiser.find_textures_in_image(img))
+# frame_analiser = FrameAnaliser()
+# img = cv2.imread("data/textures/pattern_100.png")
+# img = cv2.imread("data/images/60.jpg")
+# print(frame_analiser.texture_classifier.find_textures_on_wall_vlad(img, plot=True))
+# print(frame_analiser.find_textures_in_image(img))

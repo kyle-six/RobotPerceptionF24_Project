@@ -10,13 +10,10 @@ class Node:
     def distance(self, node):
         return np.linalg.norm(self.vlad - node.vlad)
 
-    def similarity(self, node):
+    def textures_in_common(self, node):
         set1 = self.vlad
         set2 = node.vlad
-        intersection_size = len(set1.intersection(set2))
-        union_size = len(set1.union(set2))
-        similarity = (intersection_size / union_size) * 100
-        return similarity
+        return len(set1.intersection(set2))
 
     def __hash__(self):
         return hash(self.id)
