@@ -218,7 +218,7 @@ class TextureClassifier:
         # if distances[0][0] <= tolerance_for_match:
         pattern = indices[0][0]
         for i, pattern in enumerate(indices[0]):
-            if d[0][i] < 1.295:
+            if d[0][i] < 1.25:
                 if pattern > 16:
                     pattern += 1  # cause 17 doesnt work
                 if pattern > 41:

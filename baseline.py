@@ -1,4 +1,5 @@
 # import necessary libraries and modules
+import math
 from vis_nav_game import Player, Action, Phase
 import pygame
 import cv2
@@ -337,6 +338,38 @@ class KeyboardPlayerPyGame(Player):
         plt.savefig("graph_plot.png", format="PNG")
         plt.clf()
 
+    def plot_textures(self, textures):
+        num_images = len(textures)
+        if num_images == 0:
+            return
+
+        cols = math.ceil(math.sqrt(num_images))
+        rows = math.ceil(num_images / cols)
+
+        fig, axes = plt.subplots(rows, cols, figsize=(15, 15))
+        if rows * cols == 1:
+            axes = [axes]
+        elif rows == 1 or cols == 1:
+            axes = np.array(axes).reshape(-1)
+        else:
+            axes = axes.ravel()
+
+        for i, tex_nr in enumerate(list(textures)):
+            img_path = f"data/textures/pattern_{tex_nr}.png"
+            img = cv2.imread(img_path)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            axes[i].imshow(img)
+            axes[i].axis("off")
+
+        for i in range(num_images, rows * cols):
+            axes[i].axis("off")
+
+        plt.tight_layout()
+        plt.savefig(
+            "data/out/text_found.jpg", format="jpg", bbox_inches="tight", pad_inches=0
+        )
+        plt.close()
+
     def get_lines(self):
         img = self.fpv
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -350,7 +383,8 @@ class KeyboardPlayerPyGame(Player):
 
         # print(lines_hor)
         if not lines_ver is None:
-            tex = self.frame_analiser.find_textures_in_image(self.fpv)
+            tex = self.frame_analiser.texture_classifier.find_textures_on_wall_vlad(img)
+            # tex = self.frame_analiser.find_textures_in_image(self.fpv)
             self.current_textures = self.current_textures.union(tex)
 
             # lines = np.vstack((lines_hor, lines_ver))
@@ -362,7 +396,7 @@ class KeyboardPlayerPyGame(Player):
         else:
             if len(self.lines) > 0:
                 print("left intersection")
-                print("textures: ", self.current_textures)
+                self.plot_textures(self.current_textures)
                 found_match = False
                 new_node = Node(
                     self.current_textures,
@@ -370,7 +404,7 @@ class KeyboardPlayerPyGame(Player):
                 )
 
                 for node in self.node_database:
-                    if new_node.textures_in_common(node) > 5:
+                    if new_node.similarity(node) > 50:
                         found_match = True
                         print("Node exists already")
                         self.merge_node(node, self.current_textures)

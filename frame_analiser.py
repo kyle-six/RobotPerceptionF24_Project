@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import cv2
 from texture_classifier import TextureClassifier
@@ -124,7 +125,8 @@ class FrameAnaliser:
         seperated_walls_binary = self.seperate_white_walls(binary)
         rectangles = self.find_big_rectangles(seperated_walls_binary)
         wall_images = self.extract_wall_images(rectangles, img)
-        # self.plotting.plot_rectangles(rectangles, img, write=True)
+        plot_img = img.copy()
+        self.plotting.plot_rectangles(rectangles, plot_img, write=True)
         textures = set()
         for wall_img in wall_images:
             textures = textures.union(
@@ -138,3 +140,12 @@ class FrameAnaliser:
 # img = cv2.imread("data/images/60.jpg")
 # print(frame_analiser.texture_classifier.find_textures_on_wall_vlad(img, plot=True))
 # print(frame_analiser.find_textures_in_image(img))
+
+
+# img_names = [img for img in os.listdir("data/textures/") if img.endswith(".png")]
+# img_names.sort(key=lambda x: int(x.split("_")[1].split(".")[0]))
+# for i, img_name in enumerate(img_names):
+#     img_path = os.path.join("data/textures/", img_name)
+#     img = cv2.imread(img_path)
+#     found = frame_analiser.texture_classifier.find_textures_on_wall_vlad(img, plot=True)
+#     print(i + 1)
