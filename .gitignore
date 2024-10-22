@@ -10,3 +10,4 @@ data/
 /dist
 *egg-info
 codebook.pkl
+vis_nav_player.log
