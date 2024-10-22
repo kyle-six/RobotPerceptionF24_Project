@@ -18,6 +18,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 from test_img_processing import detect_draw_lines
 
 
+import mazeGraph
+
+
 # Define a class for a player controlled by keyboard input using pygame
 class KeyboardPlayerPyGame(Player):
     def __init__(self):
@@ -277,6 +280,8 @@ class KeyboardPlayerPyGame(Player):
         """
         super(KeyboardPlayerPyGame, self).pre_navigation()
         self.pre_nav_compute()
+        mazeGraph.pre_nav_build_graph(self.tree, self.database, self.save_dir)
+        
         
     def display_next_best_view(self):
         """
