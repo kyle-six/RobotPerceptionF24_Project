@@ -407,7 +407,7 @@ class KeyboardPlayerPyGame(Player):
                 # If 'q' key is pressed, then display the next best view based on the current FPV
                 if keys[pygame.K_q]:
                     self.display_next_best_view()
-            self.mazeGraph.live_maze_graph(self.get_VLAD(fpv))
+            self.mazeGraph.add_frame(self.get_VLAD(fpv))
 
         # Display the first-person view image on the pygame screen
         rgb = convert_opencv_img_to_pygame(fpv)
