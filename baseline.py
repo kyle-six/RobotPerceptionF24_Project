@@ -13,7 +13,7 @@ from sklearn.neighbors import BallTree
 from test_img_processing import detect_draw_lines
 
 
-import mazeGraph
+from mazeGraph import MazeGraph
 
 
 # Define a class for a player controlled by keyboard input using pygame
@@ -25,7 +25,7 @@ class KeyboardPlayerPyGame(Player):
         self.screen = None  # Pygame screen
         self.keymap = None  # Mapping of keyboard keys to actions
         super(KeyboardPlayerPyGame, self).__init__()
-        
+
         # Variables for saving data
         self.count = 0  # Counter for saving images
         self.save_dir = "data/images/"  # Directory to save images to
@@ -39,6 +39,7 @@ class KeyboardPlayerPyGame(Player):
         self.codebook = pickle.load(open("codebook.pkl", "rb"))
         # Initialize database for storing VLAD descriptors of FPV
         self.database = []
+        self.mazeGraph = MazeGraph()
 
     def reset(self):
         # Reset the player state
@@ -56,7 +57,7 @@ class KeyboardPlayerPyGame(Player):
             pygame.K_UP: Action.FORWARD,
             pygame.K_DOWN: Action.BACKWARD,
             pygame.K_SPACE: Action.CHECKIN,
-            pygame.K_ESCAPE: Action.QUIT
+            pygame.K_ESCAPE: Action.QUIT,
         }
 
     def act(self):
@@ -104,11 +105,11 @@ class KeyboardPlayerPyGame(Player):
         concat_img = cv2.vconcat([hor1, hor2])
 
         w, h = concat_img.shape[:2]
-        
+
         color = (0, 0, 0)
 
-        concat_img = cv2.line(concat_img, (int(h/2), 0), (int(h/2), w), color, 2)
-        concat_img = cv2.line(concat_img, (0, int(w/2)), (h, int(w/2)), color, 2)
+        concat_img = cv2.line(concat_img, (int(h / 2), 0), (int(h / 2), w), color, 2)
+        concat_img = cv2.line(concat_img, (0, int(w / 2)), (h, int(w / 2)), color, 2)
 
         w_offset = 25
         h_offset = 10
@@ -117,12 +118,48 @@ class KeyboardPlayerPyGame(Player):
         size = 0.75
         stroke = 1
 
-        cv2.putText(concat_img, 'Front View', (h_offset, w_offset), font, size, color, stroke, line)
-        cv2.putText(concat_img, 'Right View', (int(h/2) + h_offset, w_offset), font, size, color, stroke, line)
-        cv2.putText(concat_img, 'Back View', (h_offset, int(w/2) + w_offset), font, size, color, stroke, line)
-        cv2.putText(concat_img, 'Left View', (int(h/2) + h_offset, int(w/2) + w_offset), font, size, color, stroke, line)
+        cv2.putText(
+            concat_img,
+            "Front View",
+            (h_offset, w_offset),
+            font,
+            size,
+            color,
+            stroke,
+            line,
+        )
+        cv2.putText(
+            concat_img,
+            "Right View",
+            (int(h / 2) + h_offset, w_offset),
+            font,
+            size,
+            color,
+            stroke,
+            line,
+        )
+        cv2.putText(
+            concat_img,
+            "Back View",
+            (h_offset, int(w / 2) + w_offset),
+            font,
+            size,
+            color,
+            stroke,
+            line,
+        )
+        cv2.putText(
+            concat_img,
+            "Left View",
+            (int(h / 2) + h_offset, int(w / 2) + w_offset),
+            font,
+            size,
+            color,
+            stroke,
+            line,
+        )
 
-        cv2.imshow(f'KeyboardPlayer:target_images', concat_img)
+        cv2.imshow(f"KeyboardPlayer:target_images", concat_img)
         cv2.waitKey(1)
 
     def set_target_images(self, images):
@@ -157,7 +194,7 @@ class KeyboardPlayerPyGame(Player):
             # Extend the sift_descriptors list with descriptors of the current image
             sift_descriptors.extend(des)
         return np.asarray(sift_descriptors)
-    
+
     def get_VLAD(self, img):
         """
         Compute VLAD (Vector of Locally Aggregated Descriptors) descriptor for a given image
@@ -190,16 +227,18 @@ class KeyboardPlayerPyGame(Player):
                 # axis=0 indicates summing along the rows (each row represents a descriptor)
                 # This way we compute the VLAD vector for the current cluster i
                 # This operation captures not only the presence of features but also their spatial distribution within the image
-                VLAD_feature[i] = np.sum(des[pred_labels==i, :] - centroids[i], axis=0)
+                VLAD_feature[i] = np.sum(
+                    des[pred_labels == i, :] - centroids[i], axis=0
+                )
         VLAD_feature = VLAD_feature.flatten()
         # Apply power normalization to the VLAD feature vector
-        # It takes the element-wise square root of the absolute values of the VLAD feature vector and then multiplies 
+        # It takes the element-wise square root of the absolute values of the VLAD feature vector and then multiplies
         # it by the element-wise sign of the VLAD feature vector
-        # This makes the resulting descriptor robust to noice and variations in illumination which helps improve the 
+        # This makes the resulting descriptor robust to noice and variations in illumination which helps improve the
         # robustness of VPR systems
-        VLAD_feature = np.sign(VLAD_feature)*np.sqrt(np.abs(VLAD_feature))
+        VLAD_feature = np.sign(VLAD_feature) * np.sqrt(np.abs(VLAD_feature))
         # Finally, the VLAD feature vector is normalized by dividing it by its L2 norm, ensuring that it has unit length
-        VLAD_feature = VLAD_feature/np.linalg.norm(VLAD_feature)
+        VLAD_feature = VLAD_feature / np.linalg.norm(VLAD_feature)
 
         return VLAD_feature
 
@@ -227,20 +266,22 @@ class KeyboardPlayerPyGame(Player):
             # KMeans clustering algorithm is used to create a visual vocabulary, also known as a codebook,
             # from the computed SIFT descriptors.
             # n_clusters = 64: Specifies the number of clusters (visual words) to be created in the codebook. In this case, 64 clusters are being used.
-            # init='k-means++': This specifies the method for initializing centroids. 'k-means++' is a smart initialization technique that selects initial 
+            # init='k-means++': This specifies the method for initializing centroids. 'k-means++' is a smart initialization technique that selects initial
             # cluster centers in a way that speeds up convergence.
-            # n_init=10: Specifies the number of times the KMeans algorithm will be run with different initial centroid seeds. The final result will be 
+            # n_init=10: Specifies the number of times the KMeans algorithm will be run with different initial centroid seeds. The final result will be
             # the best output of n_init consecutive runs in terms of inertia (sum of squared distances).
-            # The fit() method of KMeans is then called with sift_descriptors as input data. 
+            # The fit() method of KMeans is then called with sift_descriptors as input data.
             # This fits the KMeans model to the SIFT descriptors, clustering them into n_clusters clusters based on their feature vectors
 
             # TODO: try tuning the function parameters for better performance
-            codebook = KMeans(n_clusters = 64, init='k-means++', n_init=10, verbose=1).fit(sift_descriptors)
-            pickle.dump(codebook, open("codebook.pkl", "wb"))
+            # codebook = KMeans(
+            #     n_clusters=64, init="k-means++", n_init=10, verbose=1
+            # ).fit(sift_descriptors)
+            # pickle.dump(codebook, open("codebook.pkl", "wb"))
 
             # Build a BallTree for fast nearest neighbor search
             # We create this tree to efficiently perform nearest neighbor searches later on which will help us navigate and reach the target location
-            
+
             # TODO: try tuning the leaf size for better performance
             tree = BallTree(self.database, leaf_size=60)
             self.tree = tree
@@ -249,7 +290,7 @@ class KeyboardPlayerPyGame(Player):
             targets = self.get_target_images()
             index = self.get_neighbor(targets[0])
             self.goal = index
-            print(f'Goal ID: {self.goal}')
+            print(f"Goal ID: {self.goal}")
 
     def pre_navigation(self):
         """
@@ -257,24 +298,24 @@ class KeyboardPlayerPyGame(Player):
         """
         super(KeyboardPlayerPyGame, self).pre_navigation()
         self.pre_nav_compute()
-        mazeGraph.pre_nav_build_graph(self.tree, self.database, self.save_dir)
-        
-        
+        # if self.count > 0:
+        #     mazeGraph.pre_nav_build_graph(self.tree, self.database, self.save_dir)
+
     def display_next_best_view(self):
         """
         Display the next best view based on the current first-person view
         """
 
-        # TODO: could you write this function in a smarter way to not simply display the image that closely 
+        # TODO: could you write this function in a smarter way to not simply display the image that closely
         # matches the current FPV but the image that can efficiently help you reach the target?
 
         # Get the neighbor of current FPV
         # In other words, get the image from the database that closely matches current FPV
         index = self.get_neighbor(self.fpv)
         # Display the image 5 frames ahead of the neighbor, so that next best view is not exactly same as current FPV
-        self.display_img_from_id(index+5, f'Next Best View')
+        self.display_img_from_id(index + 5, f"Next Best View")
         # Display the next best view id along with the goal id to understand how close/far we are from the goal
-        print(f'Next View ID: {index+5} || Goal ID: {self.goal}')
+        print(f"Next View ID: {index+5} || Goal ID: {self.goal}")
 
     def see(self, fpv):
         """
@@ -300,8 +341,10 @@ class KeyboardPlayerPyGame(Player):
             see https://blanktar.jp/blog/2016/01/pygame-draw-opencv-image.html
             """
             opencv_image = opencv_image[:, :, ::-1]  # BGR->RGB
-            shape = opencv_image.shape[1::-1]  # (height,width,Number of colors) -> (width, height)
-            pygame_image = pygame.image.frombuffer(opencv_image.tobytes(), shape, 'RGB')
+            shape = opencv_image.shape[
+                1::-1
+            ]  # (height,width,Number of colors) -> (width, height)
+            pygame_image = pygame.image.frombuffer(opencv_image.tobytes(), shape, "RGB")
 
             return pygame_image
 
@@ -315,7 +358,7 @@ class KeyboardPlayerPyGame(Player):
                 # to improve performance (reach target location faster)?
 
                 # Get full absolute save path
-                save_dir_full = os.path.join(os.getcwd(),self.save_dir)
+                save_dir_full = os.path.join(os.getcwd(), self.save_dir)
                 save_path = save_dir_full + str(self.count) + ".jpg"
                 # Create path if it does not exist
                 if not os.path.isdir(save_dir_full):
@@ -330,13 +373,13 @@ class KeyboardPlayerPyGame(Player):
             # If in navigation stage
             elif self._state[1] == Phase.NAVIGATION:
                 # TODO: could you do something else, something smarter than simply getting the image closest to the current FPV?
-                
+
                 # Key the state of the keys
                 keys = pygame.key.get_pressed()
                 # If 'q' key is pressed, then display the next best view based on the current FPV
                 if keys[pygame.K_q]:
                     self.display_next_best_view()
-            detect_draw_lines(fpv)
+            self.mazeGraph.live_maze_graph(self.get_VLAD(fpv))
 
         # Display the first-person view image on the pygame screen
         rgb = convert_opencv_img_to_pygame(fpv)
@@ -346,5 +389,6 @@ class KeyboardPlayerPyGame(Player):
 
 if __name__ == "__main__":
     import vis_nav_game
+
     # Start the game with the KeyboardPlayerPyGame player
     vis_nav_game.play(the_player=KeyboardPlayerPyGame())
