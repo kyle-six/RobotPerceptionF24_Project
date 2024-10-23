@@ -72,117 +72,54 @@ class Node:
             return self.id == other.id
         return False
 
-    # def is_similar(self, other_vlad) -> bool:
-    #     similarity = np.dot(other_vlad, self.vlad) / (
-    #         np.linalg.norm(other_vlad) * np.linalg.norm(self.vlad)
-    #     )
-    #     return similarity < threshold
-
 
 class MazeGraph:
     def __init__(self):
         self.graph = nx.Graph()
-        self.current_node_id = None
+        self.current_node = None
         self.ballTree = None
         self.node_vlads = []
         self.number_nodes = 0
 
-    def add_node(self, vlad) -> int:
-        node = Node(vlad, self.number_nodes)
+    def add_node(self, vlad, id) -> int:
+        node = Node(vlad, id)
         self.number_nodes += 1
         self.graph.add_node(node)
         self.node_vlads.append(node.vlad)
-        if self.number_nodes < 10 or self.number_nodes % 10 == 0:
-            self.ballTree = BallTree(self.node_vlads)
         if not node.id == 0:
-            self.graph.add_edge(self.current_node_id, node.id)
+            self.graph.add_edge(self.current_node.id, node.id)
         print(f"New Node: {node.id}")
-        return node.id
-
-    def create_loop(self, previous_node_id: int) -> int:
-        self.graph.add_edge(self.current_node_id, previous_node_id)
-        print(f"loop: {self.current_node_id} -> {previous_node_id}")
-        return previous_node_id
+        return node
 
     def create_graph(self):
         files = os.listdir("data/images/")
-        for ix in range(1, int(len(files) / 4 - 1)):
+        for ix in range(0, int(len(files) / 4)):
             i = ix * 4
-            print(i)
             path = "data/images/" + str(i) + ".jpg"
             img = cv2.imread(path)
-            self.add_frame(get_VLAD(img))
-        pickle.dump(self.graph, open("big_graph.pickle", "wb"))
-        pickle.dump(self.ballTree, open("node_ballTree.pickle", "wb"))
+            self.add_frame(get_VLAD(img), i)
+        pickle.dump(self.graph, open("graph.pickle", "wb"))
+        print(f"Created graph with {self.number_nodes+1} nodes")
+        return self.graph
 
-    def add_frame(self, vlad):
+    def add_frame(self, vlad, id):
         # Initial node
         if len(self.graph.nodes()) == 0:
-            self.current_node_id = self.add_node(vlad)
-            return self.current_node_id
+            self.current_node = self.add_node(vlad, id)
+            return
 
-        distances, indices = self.ballTree.query(
-            vlad.reshape(1, -1), min(2, self.number_nodes)
-        )
+        distance = np.linalg.norm(self.current_node.vlad - vlad)
 
         # New Node
-        if distances[0][0] > threshold:
-            self.current_node_id = self.add_node(vlad)
+        if distance > threshold:
+            self.current_node = self.add_node(vlad, id)
 
-        # Found a loop: Image belongs to current and old node
-        elif (
-            len(indices) > 1
-            and indices[0][0] == self.current_node_id
-            and distances[0][1] < threshold
-        ):
-            self.current_node_id = self.create_loop(indices[0][1])
-
-        # Found a loop: Image belongs to old node
-        elif indices[0][0] != self.current_node_id and distances[0][0] < threshold:
-            self.current_node_id = self.create_loop(indices[0][0])
-
-        # Stay on the same node: Image belongs to current node
-        elif indices[0][0] == self.current_node_id and distances[0][0] < threshold:
-            pass
-        return self.current_node_id
+        return self.current_node
 
 
-# m = MazeGraph()
-# m.create_graph()
-big_graph = pickle.load(open("big_graph.pickle", "rb"))
-
-from matplotlib import pylab
-import matplotlib.pyplot as plt
-import networkx as nx
-import pygraphviz as pyg
+m = MazeGraph()
+graph = m.create_graph()
+# graph = pickle.load(open("graph.pickle", "rb"))
 
 
-def save_graph(graph, file_name):
-    # initialze Figure
-    plt.figure(num=None, figsize=(20, 20), dpi=80)
-    plt.axis("off")
-    fig = plt.figure(1)
-    pos = nx.spring_layout(graph)
-    nx.draw_networkx_nodes(graph, pos, node_size=20)
-    nx.draw_networkx_edges(graph, pos)
-    # nx.draw_networkx_labels(graph, pos)
-
-    # cut = 1.00
-    # xmax = cut * max(xx for xx, yy in pos.values())
-    # ymax = cut * max(yy for xx, yy in pos.values())
-    # plt.xlim(0, xmax)
-    # plt.ylim(0, ymax)
-
-    plt.savefig(file_name, bbox_inches="tight")
-    pylab.close()
-    del fig
-
-
-nx.drawing.nx_pydot.write_dot(big_graph, "graph_dot.dot")
-# nx.write_dot(big_graph, "graph_dot.dot")
-# save_graph(big_graph, "my_graph.pdf")
-
-# fig = plt.figure(1)
-# nx.draw(big_graph)
-# plt.savefig("big_graph2.pdf", bbox_inches="tight")
-# it can also be saved in .svg, .png. or .ps formats
+nx.drawing.nx_pydot.write_dot(graph, "graph_dot.dot")
