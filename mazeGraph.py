@@ -80,16 +80,37 @@ class MazeGraph:
         self.ballTree = None
         self.node_vlads = []
         self.number_nodes = 0
+        self.nodes = []
 
     def add_node(self, vlad, id) -> int:
         node = Node(vlad, id)
         self.number_nodes += 1
         self.graph.add_node(node)
+        self.nodes.append(node)
         self.node_vlads.append(node.vlad)
         if not node.id == 0:
             self.graph.add_edge(self.current_node.id, node.id)
         print(f"New Node: {node.id}")
         return node
+
+    def compute_hist(id):
+        path = "data/images/" + str(id) + ".jpg"
+        img = cv2.imread(path)
+        ...
+
+    def loop_detection(self):
+        # Create Balltree for vlad matching
+        self.ballTree = BallTree(self.node_vlads)
+
+        # Compute histograms
+        for node in self.nodes:
+            self.histograms = self.compute_hist(node.id)
+
+        # Look for loops
+        for node in self.nodes:
+            distances, indeces = self.ballTree.query(node.vlad, 2)
+            if self.histograms[indeces[0][1]] == self.histograms[node.id]:
+                self.graph.add_edge(indeces[0][1], node.id)
 
     def create_graph(self):
         files = os.listdir("data/images/")
