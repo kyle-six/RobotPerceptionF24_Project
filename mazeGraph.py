@@ -4,6 +4,7 @@ from sklearn.neighbors import BallTree
 import os
 import cv2
 import numpy as np
+import matplotlib.pyplot as plt
 
 # Maybe we should consider having 2 thresholds. One for similarity between consecutive images, and one for determining loop closure
 threshold = 1.25
@@ -93,24 +94,52 @@ class MazeGraph:
         print(f"New Node: {node.id}")
         return node
 
-    def compute_hist(id):
-        path = "data/images/" + str(id) + ".jpg"
-        img = cv2.imread(path)
-        ...
+    def approve_potential_loop(self, id1, id2, folder="data/images/") -> bool:
+        path1 = folder + str(id1) + ".jpg"
+        img1 = cv2.imread(path1)
+        img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2RGB)
+        path2 = folder + str(id2) + ".jpg"
+        img2 = cv2.imread(path2)
+        img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
+        approved = None
+
+        def on_key(event):
+            nonlocal approved
+            if event.key.lower() == "y":
+                approved = True
+                plt.close(fig)
+            elif event.key.lower() == "n":
+                approved = False
+                plt.close(fig)
+
+        fig, axs = plt.subplots(1, 2)
+        axs[0].imshow(img1)
+        axs[1].imshow(img2)
+
+        axs[0].set_axis_off()
+        axs[1].set_axis_off()
+
+        fig.canvas.mpl_connect("key_press_event", on_key)
+        plt.show(block=True)
+
+        return approved
 
     def loop_detection(self):
         # Create Balltree for vlad matching
         self.ballTree = BallTree(self.node_vlads)
+        pickle.dump(self.ballTree, open("graph_balltree.pickle", "wb"))
 
-        # Compute histograms
-        for node in self.nodes:
-            self.histograms = self.compute_hist(node.id)
+        # self.ballTree = pickle.load(open("graph_balltree.pickle", "rb"))
 
         # Look for loops
         for node in self.nodes:
-            distances, indeces = self.ballTree.query(node.vlad, 2)
-            if self.histograms[indeces[0][1]] == self.histograms[node.id]:
-                self.graph.add_edge(indeces[0][1], node.id)
+            distances, indeces = self.ballTree.query(node.vlad.reshape(1, -1), 2)
+            candidate_id = self.nodes[indeces[0][1]].id
+            candidate_dist = distances[0][1]
+            if abs(candidate_id - node.id) > 5 and candidate_dist < threshold:
+                print(f"Showing Canidate: {candidate_id} and {node.id}")
+                if self.approve_potential_loop(candidate_id, node.id):
+                    self.graph.add_edge(candidate_id, node.id)
 
     def create_graph(self):
         files = os.listdir("data/images/")
@@ -120,6 +149,8 @@ class MazeGraph:
             img = cv2.imread(path)
             self.add_frame(get_VLAD(img), i)
         pickle.dump(self.graph, open("graph.pickle", "wb"))
+        self.loop_detection()
+        pickle.dump(self.graph, open("graph_loop_closure.pickle", "wb"))
         print(f"Created graph with {self.number_nodes+1} nodes")
         return self.graph
 
@@ -128,19 +159,25 @@ class MazeGraph:
         if len(self.graph.nodes()) == 0:
             self.current_node = self.add_node(vlad, id)
             return
-
         distance = np.linalg.norm(self.current_node.vlad - vlad)
-
         # New Node
         if distance > threshold:
             self.current_node = self.add_node(vlad, id)
-
         return self.current_node
 
 
-m = MazeGraph()
-graph = m.create_graph()
-# graph = pickle.load(open("graph.pickle", "rb"))
+# m = MazeGraph()
+# graph = m.create_graph()
+graph = pickle.load(open("graph_loop_closure.pickle", "rb"))
 
+import graphviz
 
-nx.drawing.nx_pydot.write_dot(graph, "graph_dot.dot")
+# nx.drawing.nx_pydot.write_dot(graph, "graph_loop_closure.dot")
+dot_graph = graphviz.Source.from_file("graph_loop_closure.dot")
+
+# Render the graph to an SVG string
+svg_string = dot_graph.pipe(format="svg")
+
+# Save the SVG string to a file
+with open("graph_loop_closure.svg", "w") as f:
+    f.write(svg_string)
