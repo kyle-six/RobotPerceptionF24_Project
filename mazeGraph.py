@@ -14,7 +14,7 @@ codebook = pickle.load(open("codebook.pkl", "rb"))
 sift = cv2.SIFT_create()
 
 
-def get_VLAD(img):
+def get_VLAD2(img):
     """
     Compute VLAD (Vector of Locally Aggregated Descriptors) descriptor for a given image
     """
@@ -74,16 +74,91 @@ class Node:
         return False
 
 
-class MazeGraph:
-    def __init__(self):
-        self.graph = nx.Graph()
-        self.current_node = None
-        self.ballTree = None
-        self.node_vlads = []
-        self.number_nodes = 0
-        self.nodes = []
+from pathlib import Path
 
-    def add_node(self, vlad, id) -> int:
+
+class MazeGraph:
+    def __init__(self, rebuild=False):
+
+        self.graph = nx.Graph()
+        self.current_node = None  # Current Node, used during creation and navigation
+        self.ballTree = None  # Ball tree over Vlads stored in Graph (Index needs to be translated from index of node to node id)
+        self.node_vlads = []  # List of Vlads stored in Graph
+        self.number_nodes = 0
+        self.nodes = []  # List of Node object stored in Graph
+        self.created_video = False
+
+        # Backup paths
+        self.graph_pickle_path = "data/pickles/graph_loop_closure.pickle"
+        self.dot_file_path = "data/pickles/graph_loop_closure.dot"
+        self.node_list_path = "data/pickles/node_list.pickle"
+        self.node_vlads_list_path = "data/pickles/node_vlad_list.pickle"
+        self.balltree_pickle_path = "data/pickles/graph_balltree.pickle"
+        self.path_video_path = "data/out/path_video.mp4"
+
+        # Rebuild all if graph pickle is not available
+        if Path(self.graph_pickle_path).is_file() and not rebuild:
+            self.graph = pickle.load(open(self.graph_pickle_path, "rb"))
+        else:
+            self.create_graph()
+
+        # Rebuild node list if only graph pickle is available
+        if Path(self.node_list_path).is_file():
+            self.nodes = pickle.load(open(self.node_list_path, "rb"))
+            self.node_vlads = pickle.load(open(self.node_vlads_list_path, "rb"))
+        else:
+            self.rebuild_nodelist()
+
+        # Rebuild balltree if it is not available
+        if Path(self.balltree_pickle_path).is_file():
+            self.ballTree = pickle.load(open(self.balltree_pickle_path, "rb"))
+        else:
+            self.ballTree = BallTree(self.node_vlads)
+
+    def create_path_video(self, path_to_target, fps=5, size=None):
+        """
+        Create a video from a list of images and save it as an MP4 file.
+        """
+
+        # Read the first image to get the size if not provided
+        if size is None:
+            first_image = cv2.imread("data/images/" + str(path_to_target[0]) + ".jpg")
+            height, width, layers = first_image.shape
+            size = (width, height)
+
+        # Define the codec and create a VideoWriter object
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec for mp4
+        out = cv2.VideoWriter(self.path_video_path, fourcc, fps, size)
+
+        # Iterate through the image list and write each image to the video
+        for image_id in self.path_to_target[1:]:
+            img = cv2.imread("data/images/" + str(image_id) + ".jpg")
+
+            # Resize image if it's not the same size as the video frame size
+            if (img.shape[1], img.shape[0]) != size:
+                img = cv2.resize(img, size)
+
+            out.write(img)  # Write the frame
+
+        # Release the video writer
+        out.release()
+
+    def init_navigation(self, target_img) -> None:
+        if not self.created_video:
+            self.current_node = self.nodes[0]
+            self.target_vlad = get_VLAD2(target_img)
+            _, self.target_node_index = self.ballTree.query(
+                self.target_vlad.reshape(1, -1), 1
+            )
+            self.target_node_id = self.nodes[self.target_node_index[0][0]].id
+            print(f"Calculating Shortest Path to node: {self.target_node_id} ")
+            self.path_to_target = nx.shortest_path(
+                self.graph, self.current_node.id, self.target_node_id
+            )
+            self.create_path_video(self.path_to_target)
+            self.created_video = True
+
+    def add_node(self, vlad, id) -> Node:
         node = Node(vlad, id)
         self.number_nodes += 1
         self.graph.add_node(node)
@@ -124,13 +199,8 @@ class MazeGraph:
 
         return approved
 
-    def loop_detection(self):
-        # Create Balltree for vlad matching
+    def loop_detection(self) -> None:
         self.ballTree = BallTree(self.node_vlads)
-        pickle.dump(self.ballTree, open("graph_balltree.pickle", "wb"))
-
-        # self.ballTree = pickle.load(open("graph_balltree.pickle", "rb"))
-
         # Look for loops
         for node in self.nodes:
             distances, indeces = self.ballTree.query(node.vlad.reshape(1, -1), 2)
@@ -141,20 +211,26 @@ class MazeGraph:
                 if self.approve_potential_loop(candidate_id, node.id):
                     self.graph.add_edge(candidate_id, node.id)
 
-    def create_graph(self):
+    def create_graph(self) -> nx.Graph:
         files = os.listdir("data/images/")
         for ix in range(0, int(len(files) / 4)):
             i = ix * 4
             path = "data/images/" + str(i) + ".jpg"
             img = cv2.imread(path)
-            self.add_frame(get_VLAD(img), i)
-        pickle.dump(self.graph, open("graph.pickle", "wb"))
+            self.add_frame(get_VLAD2(img), i)
         self.loop_detection()
-        pickle.dump(self.graph, open("graph_loop_closure.pickle", "wb"))
+        self.save_all_files()
         print(f"Created graph with {self.number_nodes+1} nodes")
         return self.graph
 
-    def add_frame(self, vlad, id):
+    def save_all_files(self):
+        pickle.dump(self.ballTree, open(self.balltree_pickle_path, "wb"))
+        pickle.dump(self.graph, open(self.graph_pickle_path, "wb"))
+        pickle.dump(self.nodes, open(self.node_list_path, "wb"))
+        pickle.dump(self.node_vlads, open(self.node_vlads_list_path, "wb"))
+        nx.drawing.nx_pydot.write_dot(self.graph, self.dot_file_path)
+
+    def add_frame(self, vlad, id) -> None:
         # Initial node
         if len(self.graph.nodes()) == 0:
             self.current_node = self.add_node(vlad, id)
@@ -163,21 +239,31 @@ class MazeGraph:
         # New Node
         if distance > threshold:
             self.current_node = self.add_node(vlad, id)
-        return self.current_node
+
+    def rebuild_nodelist(self) -> None:
+        """This function is fucking weird, because self.graph.nodes()
+        somehow gives a mix of integers and Nodes"""
+        for thing in self.graph.nodes():
+            if isinstance(thing, Node):
+                node = thing
+                self.nodes.append(node)
+                self.node_vlads.append(node.vlad)
+        pickle.dump(self.nodes, open(self.node_list_path, "wb"))
+        pickle.dump(self.node_vlads, open(self.node_vlads_list_path, "wb"))
 
 
 # m = MazeGraph()
-# graph = m.create_graph()
-graph = pickle.load(open("graph_loop_closure.pickle", "rb"))
+# # graph = m.create_graph()
+# graph = pickle.load(open("graph_loop_closure.pickle", "rb"))
 
-import graphviz
+# import graphviz
 
-# nx.drawing.nx_pydot.write_dot(graph, "graph_loop_closure.dot")
-dot_graph = graphviz.Source.from_file("graph_loop_closure.dot")
+# # nx.drawing.nx_pydot.write_dot(graph, "graph_loop_closure.dot")
+# dot_graph = graphviz.Source.from_file("graph_loop_closure.dot")
 
-# Render the graph to an SVG string
-svg_string = dot_graph.pipe(format="svg")
+# # Render the graph to an SVG string
+# svg_string = dot_graph.pipe(format="svg")
 
-# Save the SVG string to a file
-with open("graph_loop_closure.svg", "w") as f:
-    f.write(svg_string)
+# # Save the SVG string to a file
+# with open("graph_loop_closure.svg", "w") as f:
+#     f.write(svg_string)
