@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 from test_img_processing import detect_draw_lines
 
 
-from mazeGraph import MazeGraph
+from mazeGraph import MazeGraph, Node
 
 
 # Define a class for a player controlled by keyboard input using pygame
@@ -42,16 +42,13 @@ class KeyboardPlayerPyGame(Player):
         # Initialize SIFT detector
         # SIFT stands for Scale-Invariant Feature Transform
         self.sift = cv2.SIFT_create()
-        # Load pre-trained sift features and codebook
-        self.sift_descriptors, self.codebook = None, None
-        if os.path.exists("sift_descriptors.npy"):
-            self.sift_descriptors = np.load("sift_descriptors.npy")
-        if os.path.exists("codebook.pkl"):
-            self.codebook = pickle.load(open("codebook.pkl", "rb"))
-        # Initialize database for storing VLAD descriptors of FPV
-        self.database = None
-        self.goal = None
+        # Load pre-trained codebook for VLAD encoding
+        # If you do not have this codebook comment the following line
+        # You can explore the maze once and generate the codebook (refer line 181 onwards for more)
         self.mazeGraph = MazeGraph()
+        self.codebook = pickle.load(open("codebook.pkl", "rb"))
+        # Initialize database for storing VLAD descriptors of FPV
+        self.database = []
 
     def reset(self):
         # Reset the player state
@@ -323,14 +320,14 @@ class KeyboardPlayerPyGame(Player):
             self.goal = index
             print(f"Goal ID: {self.goal}")
 
-    def pre_navigation(self):
-        """
-        Computations to perform before entering navigation and after exiting exploration
-        """
-        super(KeyboardPlayerPyGame, self).pre_navigation()
-        self.pre_nav_compute()
-        # if self.count > 0:
-        #     mazeGraph.pre_nav_build_graph(self.tree, self.database, self.save_dir)
+    # def pre_navigation(self):
+    #     """
+    #     Computations to perform before entering navigation and after exiting exploration
+    #     """
+    #     super(KeyboardPlayerPyGame, self).pre_navigation()
+    #     self.pre_nav_compute()
+    # if self.count > 0:
+    #     mazeGraph.pre_nav_build_graph(self.tree, self.database, self.save_dir)
 
     def display_next_best_view(self):
         """
@@ -393,6 +390,7 @@ class KeyboardPlayerPyGame(Player):
 
             # If in navigation stage
             elif self._state[1] == Phase.NAVIGATION:
+                self.mazeGraph.init_navigation(self.get_target_images()[0])
                 # TODO: could you do something else, something smarter than simply getting the image closest to the current FPV?
 
                 if self.goal is None:
@@ -407,7 +405,6 @@ class KeyboardPlayerPyGame(Player):
                 # If 'q' key is pressed, then display the next best view based on the current FPV
                 if keys[pygame.K_q]:
                     self.display_next_best_view()
-            self.mazeGraph.add_frame(self.get_VLAD(fpv))
 
         # Display the first-person view image on the pygame screen
         rgb = convert_opencv_img_to_pygame(fpv)
