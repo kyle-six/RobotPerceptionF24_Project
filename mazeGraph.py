@@ -9,10 +9,8 @@ import matplotlib.pyplot as plt
 # Maybe we should consider having 2 thresholds. One for similarity between consecutive images, and one for determining loop closure
 threshold = 1.25
 
-
 codebook = pickle.load(open("codebook.pkl", "rb"))
 sift = cv2.SIFT_create()
-
 
 def get_VLAD2(img):
     """
@@ -79,6 +77,11 @@ from pathlib import Path
 
 class MazeGraph:
     def __init__(self, rebuild=False):
+        self.data_path = "midterm_data/exploration_data/images/"
+        self.pickle_path = "midterm_data/pickles/"
+        self.img_prefix = "image_"
+        self.img_extension = ".png"
+        
 
         self.graph = nx.Graph()
         self.current_node = None  # Current Node, used during creation and navigation
@@ -88,13 +91,13 @@ class MazeGraph:
         self.nodes = []  # List of Node object stored in Graph
         self.created_video = False
 
-        # Backup paths
-        self.graph_pickle_path = "data/pickles/graph_loop_closure.pickle"
-        self.dot_file_path = "data/pickles/graph_loop_closure.dot"
-        self.node_list_path = "data/pickles/node_list.pickle"
-        self.node_vlads_list_path = "data/pickles/node_vlad_list.pickle"
-        self.balltree_pickle_path = "data/pickles/graph_balltree.pickle"
-        self.path_video_path = "data/out/path_video.mp4"
+        # Backup ys
+        self.graph_pickle_path = self.pickle_path + "graph_loop_closure.pickle"
+        self.dot_file_path = self.pickle_path + "graph_loop_closure.dot"
+        self.node_list_path = self.pickle_path + "node_list.pickle"
+        self.node_vlads_list_path = self.pickle_path + "node_vlad_list.pickle"
+        self.balltree_pickle_path = self.pickle_path + "graph_balltree.pickle"
+        self.path_video_path = self.pickle_path + "path_video.mp4"
 
         # Rebuild all if graph pickle is not available
         if Path(self.graph_pickle_path).is_file() and not rebuild:
@@ -119,10 +122,9 @@ class MazeGraph:
         """
         Create a video from a list of images and save it as an MP4 file.
         """
-
         # Read the first image to get the size if not provided
         if size is None:
-            first_image = cv2.imread("data/images/" + str(path_to_target[0]) + ".jpg")
+            first_image = cv2.imread(f"{self.data_path}{self.img_prefix}{path_to_target[0]}{self.img_extension}")
             height, width, layers = first_image.shape
             size = (width, height)
 
@@ -132,7 +134,7 @@ class MazeGraph:
 
         # Iterate through the image list and write each image to the video
         for image_id in self.path_to_target[1:]:
-            img = cv2.imread("data/images/" + str(image_id) + ".jpg")
+            img = cv2.imread(f"{self.data_path}{self.img_prefix}{image_id}{self.img_extension}")
 
             # Resize image if it's not the same size as the video frame size
             if (img.shape[1], img.shape[0]) != size:
@@ -169,11 +171,11 @@ class MazeGraph:
         print(f"New Node: {node.id}")
         return node
 
-    def approve_potential_loop(self, id1, id2, folder="data/images/") -> bool:
-        path1 = folder + str(id1) + ".jpg"
+    def approve_potential_loop(self, id1, id2, folder="exploration_data/images/") -> bool:
+        path1 = f"{folder}{self.img_prefix}{id1}{self.img_extension}"
         img1 = cv2.imread(path1)
         img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2RGB)
-        path2 = folder + str(id2) + ".jpg"
+        path2 = f"{folder}{self.img_prefix}{id2}{self.img_extension}"
         img2 = cv2.imread(path2)
         img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
         approved = None
@@ -207,15 +209,15 @@ class MazeGraph:
             candidate_id = self.nodes[indeces[0][1]].id
             candidate_dist = distances[0][1]
             if abs(candidate_id - node.id) > 5 and candidate_dist < threshold:
-                print(f"Showing Canidate: {candidate_id} and {node.id}")
-                if self.approve_potential_loop(candidate_id, node.id):
+                print(f"Showing Candidate: {candidate_id} and {node.id}")
+                if self.approve_potential_loop(candidate_id, node.id, self.data_path):
                     self.graph.add_edge(candidate_id, node.id)
 
     def create_graph(self) -> nx.Graph:
-        files = os.listdir("data/images/")
+        files = os.listdir(self.data_path)
         for ix in range(0, int(len(files) / 4)):
             i = ix * 4
-            path = "data/images/" + str(i) + ".jpg"
+            path = f"{self.data_path}{self.img_prefix}{i}{self.img_extension}"
             img = cv2.imread(path)
             self.add_frame(get_VLAD2(img), i)
         self.loop_detection()
@@ -229,6 +231,10 @@ class MazeGraph:
         pickle.dump(self.nodes, open(self.node_list_path, "wb"))
         pickle.dump(self.node_vlads, open(self.node_vlads_list_path, "wb"))
         nx.drawing.nx_pydot.write_dot(self.graph, self.dot_file_path)
+        # outdeg = self.graph.out_degree() TODO
+        # to_keep = [n for n in outdeg if outdeg[n] != 1]
+        # G.subgraph(to_keep)
+        # nx.drawing.nx_pydot.write_dot(self.subgraph, self.)
 
     def add_frame(self, vlad, id) -> None:
         # Initial node
@@ -242,7 +248,7 @@ class MazeGraph:
 
     def rebuild_nodelist(self) -> None:
         """This function is fucking weird, because self.graph.nodes()
-        somehow gives a mix of integers and Nodes"""
+        somehow gives a mix of integers and Nodes""" #lol i can tell this was frustrating!
         for thing in self.graph.nodes():
             if isinstance(thing, Node):
                 node = thing
@@ -252,8 +258,9 @@ class MazeGraph:
         pickle.dump(self.node_vlads, open(self.node_vlads_list_path, "wb"))
 
 
-# m = MazeGraph()
-# # graph = m.create_graph()
+#m = MazeGraph()
+#m.init_navigation(cv2.imread("midterm_data/exploration_data/images/image_5042.png"))
+#graph = m.create_graph()
 # graph = pickle.load(open("graph_loop_closure.pickle", "rb"))
 
 # import graphviz
