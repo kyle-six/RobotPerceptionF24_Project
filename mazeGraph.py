@@ -1,5 +1,6 @@
 import pickle
 import networkx as nx
+from sklearn.cluster import KMeans
 from sklearn.neighbors import BallTree
 import os
 import cv2
@@ -9,53 +10,8 @@ import matplotlib.pyplot as plt
 # Maybe we should consider having 2 thresholds. One for similarity between consecutive images, and one for determining loop closure
 threshold = 1.25
 
-codebook = pickle.load(open("codebook.pkl", "rb"))
+
 sift = cv2.SIFT_create()
-
-def get_VLAD2(img):
-    """
-    Compute VLAD (Vector of Locally Aggregated Descriptors) descriptor for a given image
-    """
-    # We use a SIFT in combination with VLAD as a feature extractor as it offers several benefits
-    # 1. SIFT features are invariant to scale and rotation changes in the image
-    # 2. SIFT features are designed to capture local patterns which makes them more robust against noise
-    # 3. VLAD aggregates local SIFT descriptors into a single compact representation for each image
-    # 4. VLAD descriptors typically require less memory storage compared to storing the original set of SIFT
-    # descriptors for each image. It is more practical for storing and retrieving large image databases efficicently.
-
-    # Pass the image to sift detector and get keypoints + descriptions
-    # Again we only need the descriptors
-    _, des = sift.detectAndCompute(img, None)
-    # We then predict the cluster labels using the pre-trained codebook
-    # Each descriptor is assigned to a cluster, and the predicted cluster label is returned
-    pred_labels = codebook.predict(des)
-    # Get number of clusters that each descriptor belongs to
-    centroids = codebook.cluster_centers_
-    # Get the number of clusters from the codebook
-    k = codebook.n_clusters
-    VLAD_feature = np.zeros([k, des.shape[1]])
-
-    # Loop over the clusters
-    for i in range(k):
-        # If the current cluster label matches the predicted one
-        if np.sum(pred_labels == i) > 0:
-            # Then, sum the residual vectors (difference between descriptors and cluster centroids)
-            # for all the descriptors assigned to that clusters
-            # axis=0 indicates summing along the rows (each row represents a descriptor)
-            # This way we compute the VLAD vector for the current cluster i
-            # This operation captures not only the presence of features but also their spatial distribution within the image
-            VLAD_feature[i] = np.sum(des[pred_labels == i, :] - centroids[i], axis=0)
-    VLAD_feature = VLAD_feature.flatten()
-    # Apply power normalization to the VLAD feature vector
-    # It takes the element-wise square root of the absolute values of the VLAD feature vector and then multiplies
-    # it by the element-wise sign of the VLAD feature vector
-    # This makes the resulting descriptor robust to noice and variations in illumination which helps improve the
-    # robustness of VPR systems
-    VLAD_feature = np.sign(VLAD_feature) * np.sqrt(np.abs(VLAD_feature))
-    # Finally, the VLAD feature vector is normalized by dividing it by its L2 norm, ensuring that it has unit length
-    VLAD_feature = VLAD_feature / np.linalg.norm(VLAD_feature)
-
-    return VLAD_feature
 
 
 class Node:
@@ -77,11 +33,10 @@ from pathlib import Path
 
 class MazeGraph:
     def __init__(self, rebuild=False):
-        self.data_path = "midterm_data/exploration_data/images/"
-        self.pickle_path = "midterm_data/pickles/"
+        self.data_path = "data/midterm_data/exploration_data/"
+        self.pickle_path = "data/midterm_data/pickles/"
         self.img_prefix = "image_"
         self.img_extension = ".png"
-        
 
         self.graph = nx.Graph()
         self.current_node = None  # Current Node, used during creation and navigation
@@ -98,6 +53,13 @@ class MazeGraph:
         self.node_vlads_list_path = self.pickle_path + "node_vlad_list.pickle"
         self.balltree_pickle_path = self.pickle_path + "graph_balltree.pickle"
         self.path_video_path = self.pickle_path + "path_video.mp4"
+        self.codebook_pickle_path = self.pickle_path + "codebook.pickle"
+
+        # Rebuild codebook if needed
+        if Path(self.codebook_pickle_path).is_file() and not rebuild:
+            self.graph = pickle.load(open(self.codebook_pickle_path, "rb"))
+        else:
+            self.compute_codebook()
 
         # Rebuild all if graph pickle is not available
         if Path(self.graph_pickle_path).is_file() and not rebuild:
@@ -124,7 +86,9 @@ class MazeGraph:
         """
         # Read the first image to get the size if not provided
         if size is None:
-            first_image = cv2.imread(f"{self.data_path}{self.img_prefix}{path_to_target[0]}{self.img_extension}")
+            first_image = cv2.imread(
+                f"{self.data_path}{self.img_prefix}{path_to_target[0]}{self.img_extension}"
+            )
             height, width, layers = first_image.shape
             size = (width, height)
 
@@ -134,7 +98,9 @@ class MazeGraph:
 
         # Iterate through the image list and write each image to the video
         for image_id in self.path_to_target[1:]:
-            img = cv2.imread(f"{self.data_path}{self.img_prefix}{image_id}{self.img_extension}")
+            img = cv2.imread(
+                f"{self.data_path}{self.img_prefix}{image_id}{self.img_extension}"
+            )
 
             # Resize image if it's not the same size as the video frame size
             if (img.shape[1], img.shape[0]) != size:
@@ -171,7 +137,9 @@ class MazeGraph:
         print(f"New Node: {node.id}")
         return node
 
-    def approve_potential_loop(self, id1, id2, folder="exploration_data/images/") -> bool:
+    def approve_potential_loop(
+        self, id1, id2, folder="exploration_data/images/"
+    ) -> bool:
         path1 = f"{folder}{self.img_prefix}{id1}{self.img_extension}"
         img1 = cv2.imread(path1)
         img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2RGB)
@@ -213,13 +181,28 @@ class MazeGraph:
                 if self.approve_potential_loop(candidate_id, node.id, self.data_path):
                     self.graph.add_edge(candidate_id, node.id)
 
+    def compute_codebook(self) -> None:
+        files = os.listdir(self.data_path)
+        sift_descriptors = list()
+        for ix in range(0, int(len(files) / 4)):
+            i = ix * 4
+            path = f"{self.data_path}{self.img_prefix}{i}{self.img_extension}"
+            print(path)
+            img = cv2.imread(path)
+            _, des = sift.detectAndCompute(img, None)
+            sift_descriptors.extend(des)
+        self.codebook = KMeans(
+            n_clusters=1024, init="k-means++", n_init=10, verbose=1
+        ).fit(sift_descriptors)
+        pickle.dump(self.codebook, open("codebook.pkl", "wb"))
+
     def create_graph(self) -> nx.Graph:
         files = os.listdir(self.data_path)
         for ix in range(0, int(len(files) / 4)):
             i = ix * 4
             path = f"{self.data_path}{self.img_prefix}{i}{self.img_extension}"
             img = cv2.imread(path)
-            self.add_frame(get_VLAD2(img), i)
+            self.add_frame(self.get_VLAD2(img), i)
         self.loop_detection()
         self.save_all_files()
         print(f"Created graph with {self.number_nodes+1} nodes")
@@ -248,7 +231,7 @@ class MazeGraph:
 
     def rebuild_nodelist(self) -> None:
         """This function is fucking weird, because self.graph.nodes()
-        somehow gives a mix of integers and Nodes""" #lol i can tell this was frustrating!
+        somehow gives a mix of integers and Nodes"""  # lol i can tell this was frustrating!
         for thing in self.graph.nodes():
             if isinstance(thing, Node):
                 node = thing
@@ -257,10 +240,58 @@ class MazeGraph:
         pickle.dump(self.nodes, open(self.node_list_path, "wb"))
         pickle.dump(self.node_vlads, open(self.node_vlads_list_path, "wb"))
 
+    def get_VLAD2(self, img):
+        """
+        Compute VLAD (Vector of Locally Aggregated Descriptors) descriptor for a given image
+        """
+        # We use a SIFT in combination with VLAD as a feature extractor as it offers several benefits
+        # 1. SIFT features are invariant to scale and rotation changes in the image
+        # 2. SIFT features are designed to capture local patterns which makes them more robust against noise
+        # 3. VLAD aggregates local SIFT descriptors into a single compact representation for each image
+        # 4. VLAD descriptors typically require less memory storage compared to storing the original set of SIFT
+        # descriptors for each image. It is more practical for storing and retrieving large image databases efficicently.
 
-#m = MazeGraph()
-#m.init_navigation(cv2.imread("midterm_data/exploration_data/images/image_5042.png"))
-#graph = m.create_graph()
+        # Pass the image to sift detector and get keypoints + descriptions
+        # Again we only need the descriptors
+        _, des = sift.detectAndCompute(img, None)
+        # We then predict the cluster labels using the pre-trained codebook
+        # Each descriptor is assigned to a cluster, and the predicted cluster label is returned
+        pred_labels = self.codebook.predict(des)
+        # Get number of clusters that each descriptor belongs to
+        centroids = self.codebook.cluster_centers_
+        # Get the number of clusters from the self.codebook
+        k = self.codebook.n_clusters
+        VLAD_feature = np.zeros([k, des.shape[1]])
+
+        # Loop over the clusters
+        for i in range(k):
+            # If the current cluster label matches the predicted one
+            if np.sum(pred_labels == i) > 0:
+                # Then, sum the residual vectors (difference between descriptors and cluster centroids)
+                # for all the descriptors assigned to that clusters
+                # axis=0 indicates summing along the rows (each row represents a descriptor)
+                # This way we compute the VLAD vector for the current cluster i
+                # This operation captures not only the presence of features but also their spatial distribution within the image
+                VLAD_feature[i] = np.sum(
+                    des[pred_labels == i, :] - centroids[i], axis=0
+                )
+        VLAD_feature = VLAD_feature.flatten()
+        # Apply power normalization to the VLAD feature vector
+        # It takes the element-wise square root of the absolute values of the VLAD feature vector and then multiplies
+        # it by the element-wise sign of the VLAD feature vector
+        # This makes the resulting descriptor robust to noice and variations in illumination which helps improve the
+        # robustness of VPR systems
+        VLAD_feature = np.sign(VLAD_feature) * np.sqrt(np.abs(VLAD_feature))
+        # Finally, the VLAD feature vector is normalized by dividing it by its L2 norm, ensuring that it has unit length
+        VLAD_feature = VLAD_feature / np.linalg.norm(VLAD_feature)
+
+        return VLAD_feature
+
+
+m = MazeGraph()
+
+# m.init_navigation(cv2.imread("midterm_data/exploration_data/images/image_5042.png"))
+# graph = m.create_graph()
 # graph = pickle.load(open("graph_loop_closure.pickle", "rb"))
 
 # import graphviz
