@@ -12,3 +12,5 @@ data/
 *egg-info
 codebook.pkl
 vis_nav_player.log
+/exploration_data
+/midterm_data
