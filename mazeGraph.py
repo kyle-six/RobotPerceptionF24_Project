@@ -33,8 +33,8 @@ from pathlib import Path
 
 class MazeGraph:
     def __init__(self, rebuild=False):
-        self.data_path = "data/midterm_data/exploration_data/"
-        self.pickle_path = "data/midterm_data/pickles/"
+        self.data_path = "data/images/"
+        self.pickle_path = "data/pickles/"
         self.img_prefix = "image_"
         self.img_extension = ".png"
 
@@ -53,11 +53,11 @@ class MazeGraph:
         self.node_vlads_list_path = self.pickle_path + "node_vlad_list.pickle"
         self.balltree_pickle_path = self.pickle_path + "graph_balltree.pickle"
         self.path_video_path = self.pickle_path + "path_video.mp4"
-        self.codebook_pickle_path = self.pickle_path + "codebook.pickle"
+        self.codebook_pickle_path = self.pickle_path + "codebook.pkl"
 
         # Rebuild codebook if needed
         if Path(self.codebook_pickle_path).is_file() and not rebuild:
-            self.graph = pickle.load(open(self.codebook_pickle_path, "rb"))
+            self.codebook = pickle.load(open(self.codebook_pickle_path, "rb"))
         else:
             self.compute_codebook()
 
@@ -78,7 +78,7 @@ class MazeGraph:
         if Path(self.balltree_pickle_path).is_file():
             self.ballTree = pickle.load(open(self.balltree_pickle_path, "rb"))
         else:
-            self.ballTree = BallTree(self.node_vlads)
+            self.ballTree = BallTree(self.node_vlads,leaf_size=20)
 
     def create_path_video(self, path_to_target, fps=5, size=None):
         """
@@ -114,7 +114,7 @@ class MazeGraph:
     def init_navigation(self, target_img) -> None:
         if not self.created_video:
             self.current_node = self.nodes[0]
-            self.target_vlad = get_VLAD2(target_img)
+            self.target_vlad = self.get_VLAD2(target_img)
             _, self.target_node_index = self.ballTree.query(
                 self.target_vlad.reshape(1, -1), 1
             )
@@ -138,14 +138,14 @@ class MazeGraph:
         return node
 
     def approve_potential_loop(
-        self, id1, id2, folder="exploration_data/images/"
+        self, id1, id2, folder="data/images/"
     ) -> bool:
         path1 = f"{folder}{self.img_prefix}{id1}{self.img_extension}"
         img1 = cv2.imread(path1)
-        img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2RGB)
+        # img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2RGB)
         path2 = f"{folder}{self.img_prefix}{id2}{self.img_extension}"
         img2 = cv2.imread(path2)
-        img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
+        # img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
         approved = None
 
         def on_key(event):
@@ -170,16 +170,20 @@ class MazeGraph:
         return approved
 
     def loop_detection(self) -> None:
-        self.ballTree = BallTree(self.node_vlads)
+        num_neighbors = 10  # Increased from 4
+        id_difference_threshold = 10  # Reduced from 25
+        self.ballTree = BallTree(self.node_vlads, leaf_size=20)
         # Look for loops
         for node in self.nodes:
-            distances, indeces = self.ballTree.query(node.vlad.reshape(1, -1), 2)
-            candidate_id = self.nodes[indeces[0][1]].id
-            candidate_dist = distances[0][1]
-            if abs(candidate_id - node.id) > 5 and candidate_dist < threshold:
-                print(f"Showing Candidate: {candidate_id} and {node.id}")
-                if self.approve_potential_loop(candidate_id, node.id, self.data_path):
-                    self.graph.add_edge(candidate_id, node.id)
+            distances, indices = self.ballTree.query(node.vlad.reshape(1, -1), num_neighbors)
+            for i in range(1, num_neighbors):
+                candidate_id = self.nodes[indices[0][i]].id
+                candidate_dist = distances[0][i]
+                if abs(candidate_id - node.id) > id_difference_threshold and candidate_dist < threshold and not self.graph.has_edge(candidate_id, node.id):
+                    print(f"Evaluating potential loop closure between nodes {node.id} and {candidate_id}")
+                    if self.approve_potential_loop(candidate_id, node.id, self.data_path):
+                        self.graph.add_edge(candidate_id, node.id)
+
 
     def compute_codebook(self) -> None:
         files = os.listdir(self.data_path)
@@ -230,7 +234,7 @@ class MazeGraph:
             self.current_node = self.add_node(vlad, id)
 
     def rebuild_nodelist(self) -> None:
-        """This function is fucking weird, because self.graph.nodes()
+        """This function is weird, because self.graph.nodes()
         somehow gives a mix of integers and Nodes"""  # lol i can tell this was frustrating!
         for thing in self.graph.nodes():
             if isinstance(thing, Node):
@@ -288,7 +292,11 @@ class MazeGraph:
         return VLAD_feature
 
 
-m = MazeGraph()
+# m = MazeGraph()
+# path="data/images/image_5475.png"
+# img=cv2.imread(path)
+# m.init_navigation(img)
+
 
 # m.init_navigation(cv2.imread("midterm_data/exploration_data/images/image_5042.png"))
 # graph = m.create_graph()
