@@ -6,7 +6,7 @@ import torch.optim as optim
 from torchvision import transforms
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image
-from netVlad import EmbedNet, NetVLAD
+from netVlad import NetVLAD
 from torchvision.models import resnet18
 import sys
 
