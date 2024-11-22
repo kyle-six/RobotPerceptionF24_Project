@@ -6,12 +6,20 @@ import os
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
+import torch
+
+from netVlad import NetVLADPipeline
 
 # Maybe we should consider having 2 thresholds. One for similarity between consecutive images, and one for determining loop closure
 threshold = 1.25
 
 
 sift = cv2.SIFT_create()
+import torch
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = NetVLADPipeline("netvlad_maze.pth")
+model.to(device)
 
 
 class Node:
@@ -35,7 +43,7 @@ class MazeGraph:
     def __init__(self, rebuild=False):
         self.folder_path = "data/midterm_data"
         self.data_path = self.folder_path + "/images/"
-        self.pickle_path = self.folder_path + "/pickles/"
+        self.pickle_path = self.folder_path + "/pickles_netVlad/"
         self.img_prefix = "image_"
         self.img_extension = ".png"
 
@@ -53,7 +61,7 @@ class MazeGraph:
         self.node_list_path = self.pickle_path + "node_list.pickle"
         self.node_vlads_list_path = self.pickle_path + "node_vlad_list.pickle"
         self.balltree_pickle_path = self.pickle_path + "graph_balltree.pickle"
-        self.path_video_path = self.folder_path + "/out/path_video.mp4"
+        self.path_video_path = self.folder_path + "/out_netVlad/path_video.mp4"
         self.codebook_pickle_path = self.pickle_path + "codebook.pkl"
 
         # Rebuild codebook if needed
@@ -79,7 +87,7 @@ class MazeGraph:
         if Path(self.balltree_pickle_path).is_file():
             self.ballTree = pickle.load(open(self.balltree_pickle_path, "rb"))
         else:
-            self.ballTree = BallTree(self.node_vlads, leaf_size=20)
+            self.ballTree = BallTree(self.node_vlads, leaf_size=40, metric="euclidean")
         self.loop_detection()
 
     def create_path_video(self, path_to_target, fps=5, size=None):
@@ -249,7 +257,7 @@ class MazeGraph:
     def loop_detection(self) -> None:
         num_neighbors = 10  # Increased from 4
         id_difference_threshold = 10  # Reduced from 25
-        self.ballTree = BallTree(self.node_vlads, leaf_size=20)
+        self.ballTree = BallTree(self.node_vlads, leaf_size=40, metric="euclidean")
         # Look for loops
         for node in self.nodes:
             distances, indices = self.ballTree.query(
@@ -293,7 +301,7 @@ class MazeGraph:
             i = ix * 4
             path = f"{self.data_path}{self.img_prefix}{i}{self.img_extension}"
             img = cv2.imread(path)
-            self.add_frame(self.get_VLAD2(img), i)
+            self.add_frame(self.get_netVLAD_features(img), i)
         self.loop_detection()
         self.save_all_files()
         print(f"Created graph with {self.number_nodes+1} nodes")
@@ -381,6 +389,27 @@ class MazeGraph:
         VLAD_feature = VLAD_feature / np.linalg.norm(VLAD_feature)
 
         return VLAD_feature
+
+    def get_netVLAD_features(self, img):
+        """
+        Extract VLAD features using a pretrained NetVLAD model.
+        """
+        from torchvision.transforms import Compose, Resize, ToTensor, Normalize
+
+        # Define preprocessing transformations
+        preprocess = Compose(
+            [
+                Resize((224, 224)),  # Resize to model input size
+                ToTensor(),
+                Normalize(mean=[0.6537, 0.6355, 0.6409], std=[0.3719, 0.3697, 0.3589]),
+            ]
+        )
+
+        img = preprocess(img).unsqueeze(0).to(device)  # Add batch dimension
+
+        with torch.no_grad():
+            vlad_features = model(img)  # Extract NetVLAD features
+        return vlad_features.to(device).numpy().flatten()
 
 
 if __name__ == "__main__":
