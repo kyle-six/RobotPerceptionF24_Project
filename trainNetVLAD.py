@@ -11,6 +11,12 @@ from torchvision.models import resnet18
 import sys
 
 
+image_dir = "data/midterm_data/images/"
+batch_size = 30
+epochs = 10
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
 def print_loading_bar(
     iteration, total, prefix="", suffix="", length=50, fill="█", print_end="\r"
 ):
@@ -54,9 +60,6 @@ class TripletLoss(nn.Module):
         return self.loss(anchor, positive, negative)
 
 
-# Data preparation
-image_dir = "data/midterm_data/images/"
-
 transform = transforms.Compose(
     [
         transforms.Resize((224, 224)),  # Resize to match input size of CNN
@@ -69,7 +72,6 @@ transform = transforms.Compose(
 
 
 dataset = MazeDataset(image_dir, transform)
-batch_size = 30
 dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
 
@@ -88,7 +90,6 @@ dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
 
 encoder = resnet18(pretrained=True)
-
 base_model = nn.Sequential(
     encoder.conv1,
     encoder.bn1,
@@ -101,14 +102,12 @@ base_model = nn.Sequential(
 )
 dim = list(base_model.parameters())[-1].shape[0]
 net_vlad = NetVLAD(num_clusters=32, dim=dim, alpha=1.0)
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 base_model = base_model.to(device)
 net_vlad_model = net_vlad.to(device)
 
 # Training setup
 triplet_loss = TripletLoss(margin=1.0).to(device)
 optimizer = optim.Adam(net_vlad_model.parameters(), lr=1e-4)
-epochs = 10
 
 
 def generate_triplets(anchor_idxs, data_len, max_frame_gap=10, negative_gap=500):
@@ -134,6 +133,8 @@ for epoch in range(epochs):
     running_loss = 0.0
     nr_samples = 0
     for i, (anchor_imgs, anchor_idxs) in enumerate(dataloader):
+        if i == len(dataloader) - 1:
+            break
         print_loading_bar(
             i, len(dataloader), prefix="Progress", suffix="Complete", length=40
         )
