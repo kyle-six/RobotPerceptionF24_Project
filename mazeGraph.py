@@ -14,6 +14,7 @@ from netVlad import NetVLADPipeline
 # Maybe we should consider having 2 thresholds. One for similarity between consecutive images, and one for determining loop closure
 threshold = 0.01
 threshold_loop = 0.015
+MANUAL_CHECK = False
 
 sift = cv2.SIFT_create()
 import torch
@@ -89,8 +90,8 @@ class MazeGraph:
             self.ballTree = pickle.load(open(self.balltree_pickle_path, "rb"))
         else:
             self.ballTree = BallTree(self.node_vlads, leaf_size=40, metric="euclidean")
-        # self.loop_detection()
-        # self.save_all_files()
+        self.loop_detection()
+        self.save_all_files()
         # self.clean_graph()
         # self.save_all_files
 
@@ -159,7 +160,7 @@ class MazeGraph:
         path2 = f"{self.data_path}{self.img_prefix}{id2}{self.img_extension}"
         img2 = cv2.imread(path2)
         # img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
-        print(self.match_and_check_epipolar_geometry(img1, img2))
+
         approved = None
 
         def on_key(event):
@@ -284,16 +285,19 @@ class MazeGraph:
                     and candidate_dist < threshold_loop
                     and not self.graph.has_edge(candidate_id, node.id)
                 ):
-                    # print(
-                    #     f"Evaluating potential loop closure between nodes {node.id} and {candidate_id}"
-                    # )
-                    # if self.approve_potential_loop(
-                    #     candidate_id, node.id, self.data_path
-                    # ):
-                    #     self.graph.add_edge(candidate_id, node.id)
+
                     if self.match_and_check_epipolar_geometry(candidate_id, node.id):
-                        print(f"Loop: {node.id} -> {candidate_id}")
-                        self.graph.add_edge(candidate_id, node.id)
+
+                        if MANUAL_CHECK:
+                            print(
+                                f"Evaluating potential loop closure between nodes {node.id} and {candidate_id}"
+                            )
+                            if self.approve_potential_loop(candidate_id, node.id):
+                                self.graph.add_edge(candidate_id, node.id)
+                                print(f"Loop: {node.id} -> {candidate_id}")
+                        else:
+                            self.graph.add_edge(candidate_id, node.id)
+                            print(f"Loop: {node.id} -> {candidate_id}")
 
     def compute_codebook(self) -> None:
         files = os.listdir(self.data_path)
