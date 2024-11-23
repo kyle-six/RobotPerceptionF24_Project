@@ -7,12 +7,13 @@ import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
+from PIL import Image
 
 from netVlad import NetVLADPipeline
 
 # Maybe we should consider having 2 thresholds. One for similarity between consecutive images, and one for determining loop closure
-threshold = 1.25
-
+threshold = 0.01
+threshold_loop = 0.015
 
 sift = cv2.SIFT_create()
 import torch
@@ -65,10 +66,10 @@ class MazeGraph:
         self.codebook_pickle_path = self.pickle_path + "codebook.pkl"
 
         # Rebuild codebook if needed
-        if Path(self.codebook_pickle_path).is_file() and not rebuild:
-            self.codebook = pickle.load(open(self.codebook_pickle_path, "rb"))
-        else:
-            self.compute_codebook()
+        # if Path(self.codebook_pickle_path).is_file() and not rebuild:
+        #     self.codebook = pickle.load(open(self.codebook_pickle_path, "rb"))
+        # else:
+        #     self.compute_codebook()
 
         # Rebuild all if graph pickle is not available
         if Path(self.graph_pickle_path).is_file() and not rebuild:
@@ -88,7 +89,10 @@ class MazeGraph:
             self.ballTree = pickle.load(open(self.balltree_pickle_path, "rb"))
         else:
             self.ballTree = BallTree(self.node_vlads, leaf_size=40, metric="euclidean")
-        self.loop_detection()
+        # self.loop_detection()
+        # self.save_all_files()
+        # self.clean_graph()
+        # self.save_all_files
 
     def create_path_video(self, path_to_target, fps=5, size=None):
         """
@@ -124,7 +128,8 @@ class MazeGraph:
     def init_navigation(self, target_img) -> None:
         if not self.created_video:
             self.current_node = self.nodes[0]
-            self.target_vlad = self.get_VLAD2(target_img)
+            self.target_vlad = self.get_netVLAD_features(target_img)
+
             _, self.target_node_index = self.ballTree.query(
                 self.target_vlad.reshape(1, -1), 1
             )
@@ -147,11 +152,11 @@ class MazeGraph:
         print(f"New Node: {node.id}")
         return node
 
-    def approve_potential_loop(self, id1, id2, folder="data/images/") -> bool:
-        path1 = f"{folder}{self.img_prefix}{id1}{self.img_extension}"
+    def approve_potential_loop(self, id1, id2) -> bool:
+        path1 = f"{self.data_path}{self.img_prefix}{id1}{self.img_extension}"
         img1 = cv2.imread(path1)
         # img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2RGB)
-        path2 = f"{folder}{self.img_prefix}{id2}{self.img_extension}"
+        path2 = f"{self.data_path}{self.img_prefix}{id2}{self.img_extension}"
         img2 = cv2.imread(path2)
         # img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
         print(self.match_and_check_epipolar_geometry(img1, img2))
@@ -178,7 +183,12 @@ class MazeGraph:
 
         return approved
 
-    def match_and_check_epipolar_geometry(self, image1, image2, inlier_threshold=0.5):
+    def match_and_check_epipolar_geometry(self, id1, id2, inlier_threshold=0.5):
+        path1 = f"{self.data_path}{self.img_prefix}{id1}{self.img_extension}"
+        image1 = cv2.imread(path1)
+        path2 = f"{self.data_path}{self.img_prefix}{id2}{self.img_extension}"
+        image2 = cv2.imread(path2)
+
         # Step 1: Detect SIFT features and compute descriptors
         keypoints1, descriptors1 = sift.detectAndCompute(image1, None)
         keypoints2, descriptors2 = sift.detectAndCompute(image2, None)
@@ -197,7 +207,7 @@ class MazeGraph:
 
         # If there are not enough good matches, return False
         if len(good_matches) < 8:
-            print("Not enough matches")
+            # print("Not enough matches")
             return False
 
         # If the good matche ratio is low, return False
@@ -205,25 +215,25 @@ class MazeGraph:
             len(good_matches) / len(keypoints1) < 0.1
             or len(good_matches) / len(keypoints2) < 0.1
         ):
-            print(len(good_matches))
-            print(len(keypoints1))
-            print("Match Ratio below 0.5")
+            # print(len(good_matches))
+            # print(len(keypoints1))
+            # print("Match Ratio below 0.5")
             return False
 
         # Check good matches are from multiple clusters
         good_match_describtors = np.float32(
             [descriptors1[m.queryIdx] for m in good_matches]
         )
-        nr_different_clusters = self.get_nr_of_different_clusters(
-            good_match_describtors
-        )
-        print("Nr of clusters: ", nr_different_clusters)
-        if nr_different_clusters < 20:
-            print(
-                "Nr of clusters below 20: ",
-                nr_different_clusters,
-            )
-            return False
+        # nr_different_clusters = self.get_nr_of_different_clusters(
+        #     good_match_describtors
+        # )
+        # print("Nr of clusters: ", nr_different_clusters)
+        # if nr_different_clusters < 20:
+        #     print(
+        #         "Nr of clusters below 20: ",
+        #         nr_different_clusters,
+        #     )
+        #     return False
 
         # Step 4: Compute the fundamental matrix with RANSAC
         pts1 = np.float32([keypoints1[m.queryIdx].pt for m in good_matches])
@@ -240,44 +250,49 @@ class MazeGraph:
 
         # Check if the inlier ratio is above the threshold
         if inlier_ratio < inlier_threshold:
-            print("inlier ratio: ", inlier_ratio)
+            # print("inlier ratio: ", inlier_ratio)
             return False
 
         # Check good matches are distributed over full image
-        print(np.max(pts1, axis=0))
+        # print(np.max(pts1, axis=0))
         if np.max(pts1, axis=0)[0] - np.min(pts1, axis=0)[0] < 200:
-            print(
-                "Good matches dont cover enough of image: ",
-                np.max(pts1, axis=0)[0] - np.min(pts1, axis=0)[0],
-            )
+            # print(
+            #     "Good matches dont cover enough of image: ",
+            #     np.max(pts1, axis=0)[0] - np.min(pts1, axis=0)[0],
+            # )
             return False
 
         return True
 
     def loop_detection(self) -> None:
-        num_neighbors = 10  # Increased from 4
-        id_difference_threshold = 10  # Reduced from 25
+        num_neighbors = 20  # Increased from 4
+        id_difference_threshold = 15  # Reduced from 25
         self.ballTree = BallTree(self.node_vlads, leaf_size=40, metric="euclidean")
+        self.save_all_files()
         # Look for loops
         for node in self.nodes:
             distances, indices = self.ballTree.query(
                 node.vlad.reshape(1, -1), num_neighbors
             )
+
             for i in range(1, num_neighbors):
                 candidate_id = self.nodes[indices[0][i]].id
                 candidate_dist = distances[0][i]
+
                 if (
-                    abs(candidate_id - node.id)
-                    > id_difference_threshold
-                    # and candidate_dist < threshold
-                    # and not self.graph.has_edge(candidate_id, node.id)
+                    abs(candidate_id - node.id) > id_difference_threshold
+                    and candidate_dist < threshold_loop
+                    and not self.graph.has_edge(candidate_id, node.id)
                 ):
-                    print(
-                        f"Evaluating potential loop closure between nodes {node.id} and {candidate_id}"
-                    )
-                    if self.approve_potential_loop(
-                        candidate_id, node.id, self.data_path
-                    ):
+                    # print(
+                    #     f"Evaluating potential loop closure between nodes {node.id} and {candidate_id}"
+                    # )
+                    # if self.approve_potential_loop(
+                    #     candidate_id, node.id, self.data_path
+                    # ):
+                    #     self.graph.add_edge(candidate_id, node.id)
+                    if self.match_and_check_epipolar_geometry(candidate_id, node.id):
+                        print(f"Loop: {node.id} -> {candidate_id}")
                         self.graph.add_edge(candidate_id, node.id)
 
     def compute_codebook(self) -> None:
@@ -300,11 +315,35 @@ class MazeGraph:
         for ix in range(0, int(len(files) / 4)):
             i = ix * 4
             path = f"{self.data_path}{self.img_prefix}{i}{self.img_extension}"
-            img = cv2.imread(path)
-            self.add_frame(self.get_netVLAD_features(img), i)
+            # img = cv2.imread(path)
+            self.add_frame(self.get_netVLAD_features(path), i)
+
         self.loop_detection()
         self.save_all_files()
         print(f"Created graph with {self.number_nodes+1} nodes")
+        return self.graph
+
+    def clean_graph(self):
+        edges_to_remove = []
+        for u, v in self.graph.edges():
+            # Skip edges where node IDs are less than 10 apart
+
+            if abs(u - v) < 10:
+                continue
+
+            # Get neighbors of u and v
+            neighbors_u = set(self.graph.neighbors(u))
+            neighbors_v = set(self.graph.neighbors(v))
+
+            # Check if there are no connections between the neighbors of u and v
+            if not any(
+                self.graph.has_edge(n1, n2) for n1 in neighbors_u for n2 in neighbors_v
+            ):
+                edges_to_remove.append((u, v))
+                print(f"Remove {u} -> {v}")
+
+        # Remove edges
+        self.graph.remove_edges_from(edges_to_remove)
         return self.graph
 
     def save_all_files(self):
@@ -390,12 +429,13 @@ class MazeGraph:
 
         return VLAD_feature
 
-    def get_netVLAD_features(self, img):
+    def get_netVLAD_features(self, path):
         """
         Extract VLAD features using a pretrained NetVLAD model.
         """
         from torchvision.transforms import Compose, Resize, ToTensor, Normalize
 
+        img = Image.open(path).convert("RGB")
         # Define preprocessing transformations
         preprocess = Compose(
             [
@@ -415,6 +455,4 @@ class MazeGraph:
 if __name__ == "__main__":
 
     m = MazeGraph()
-    path = "data/midterm_data/images/image_5475.png"
-    img = cv2.imread(path)
-    m.init_navigation(img)
+    m.init_navigation("data/midterm_data/images/image_5475.png")
