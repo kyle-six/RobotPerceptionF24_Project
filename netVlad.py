@@ -81,10 +81,15 @@ class NetVLADPipeline(nn.Module):
         )
         dim = list(base_model.parameters())[-1].shape[0]
         net_vlad = NetVLAD(num_clusters=32, dim=dim, alpha=1.0)
-        self.base_model = base_model
-        self.net_vlad = net_vlad.load_state_dict(net_vlad_weights_path)
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.net_vlad_model = net_vlad.to(device)
+        self.base_model = base_model.to(device)
+
+        state_dict = torch.load(net_vlad_weights_path, map_location=device)
+        self.net_vlad_model.load_state_dict(state_dict)
 
     def forward(self, x):
         x = self.base_model(x)
-        embedded_x = self.net_vlad(x)
+        embedded_x = self.net_vlad_model(x)
         return embedded_x
