@@ -12,9 +12,9 @@ from PIL import Image
 from netVlad import NetVLADPipeline
 
 # Maybe we should consider having 2 thresholds. One for similarity between consecutive images, and one for determining loop closure
-threshold = 0.01
+threshold = 0.013
 threshold_loop = 0.015
-MANUAL_CHECK = False
+MANUAL_CHECK = True
 
 sift = cv2.SIFT_create()
 import torch
@@ -90,8 +90,8 @@ class MazeGraph:
             self.ballTree = pickle.load(open(self.balltree_pickle_path, "rb"))
         else:
             self.ballTree = BallTree(self.node_vlads, leaf_size=40, metric="euclidean")
-        self.loop_detection()
-        self.save_all_files()
+        # self.loop_detection()
+        # self.save_all_files()
         # self.clean_graph()
         # self.save_all_files
 
@@ -184,7 +184,43 @@ class MazeGraph:
 
         return approved
 
-    def match_and_check_epipolar_geometry(self, id1, id2, inlier_threshold=0.5):
+    def is_valid_motion(self, rotation, translation, allowed_degrees=6):
+        """
+        Check if the rotation and translation represent valid planar motions.
+
+        Args:
+            rotation: 3x3 rotation matrix.
+            translation: 3x1 translation vector.
+            allowed_degrees: Allowed deviation (in degrees) for tilt from the ground plane.
+
+        Returns:
+            bool: True if the motion is valid, False otherwise.
+        """
+        # Extract angles from the rotation matrix (in degrees)
+        rot_x_angle = np.arcsin(-rotation[2, 1]) * (180 / np.pi)  # Pitch
+        rot_y_angle = np.arcsin(rotation[2, 0]) * (180 / np.pi)  # Roll
+
+        # Check if the rotation is predominantly planar (yaw-only)
+        if abs(rot_x_angle) > allowed_degrees or abs(rot_y_angle) > allowed_degrees:
+            return False
+
+        # Check if the translation is planar (x and z components dominate)
+        t_norm = np.linalg.norm(translation)
+        tx, ty, tz = translation.flatten() / t_norm
+        if abs(ty) > 0.3:  # Significant vertical motion
+            return False
+        return True
+
+    def compute_color_sift(self, image, Keypoints):
+        # Convert image to HSV color space
+        hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        hue = hsv_image[:, :, 0]
+        _, descriptors = sift.compute(hue, Keypoints)
+        return descriptors
+
+    def match_and_check_epipolar_geometry(
+        self, id1, id2, inlier_threshold=0.75, debug=False
+    ):
         path1 = f"{self.data_path}{self.img_prefix}{id1}{self.img_extension}"
         image1 = cv2.imread(path1)
         path2 = f"{self.data_path}{self.img_prefix}{id2}{self.img_extension}"
@@ -193,6 +229,16 @@ class MazeGraph:
         # Step 1: Detect SIFT features and compute descriptors
         keypoints1, descriptors1 = sift.detectAndCompute(image1, None)
         keypoints2, descriptors2 = sift.detectAndCompute(image2, None)
+
+        for kp in keypoints1:
+            kp.size *= 2  # Increase the scale factor
+        descriptors1 = sift.compute(image1, keypoints1)[1]
+        for kp in keypoints2:
+            kp.size *= 2  # Increase the scale factor
+        descriptors2 = sift.compute(image2, keypoints2)[1]
+
+        descriptors1 += self.compute_color_sift(image1, keypoints1)
+        descriptors2 += self.compute_color_sift(image2, keypoints2)
 
         # Step 2: Match descriptors using FLANN matcher
         index_params = dict(algorithm=1, trees=5)  # KD-Tree algorithm
@@ -207,34 +253,9 @@ class MazeGraph:
                 good_matches.append(m)
 
         # If there are not enough good matches, return False
-        if len(good_matches) < 8:
+        if len(good_matches) < 15:
             # print("Not enough matches")
             return False
-
-        # If the good matche ratio is low, return False
-        if (
-            len(good_matches) / len(keypoints1) < 0.1
-            or len(good_matches) / len(keypoints2) < 0.1
-        ):
-            # print(len(good_matches))
-            # print(len(keypoints1))
-            # print("Match Ratio below 0.5")
-            return False
-
-        # Check good matches are from multiple clusters
-        good_match_describtors = np.float32(
-            [descriptors1[m.queryIdx] for m in good_matches]
-        )
-        # nr_different_clusters = self.get_nr_of_different_clusters(
-        #     good_match_describtors
-        # )
-        # print("Nr of clusters: ", nr_different_clusters)
-        # if nr_different_clusters < 20:
-        #     print(
-        #         "Nr of clusters below 20: ",
-        #         nr_different_clusters,
-        #     )
-        #     return False
 
         # Step 4: Compute the fundamental matrix with RANSAC
         pts1 = np.float32([keypoints1[m.queryIdx].pt for m in good_matches])
@@ -243,6 +264,23 @@ class MazeGraph:
         fundamental_matrix, inliers = cv2.findFundamentalMat(
             pts1, pts2, cv2.FM_RANSAC, 1.0, 0.99
         )
+        if fundamental_matrix is None or fundamental_matrix.shape != (3, 3):
+            return False
+        # Step 4: Decompose the essential matrix into rotation and translation
+
+        camera_matrix = np.array([[92, 0, 160], [0, 92, 120], [0, 0, 1]])
+        essential_matrix = camera_matrix.T @ fundamental_matrix @ camera_matrix
+        rotation1, rotation2, translation = cv2.decomposeEssentialMat(essential_matrix)
+
+        # Validate both possible decompositions
+        motion_valid1 = self.is_valid_motion(rotation1, translation)
+        motion_valid2 = self.is_valid_motion(
+            rotation2, -translation
+        )  # Translation sign is ambiguous
+
+        if not (motion_valid1 or motion_valid2):
+            # print("No valid planar motion found")
+            return False
 
         # Step 5: Count the inliers
         inlier_count = np.sum(inliers)
@@ -254,14 +292,59 @@ class MazeGraph:
             # print("inlier ratio: ", inlier_ratio)
             return False
 
-        # Check good matches are distributed over full image
-        # print(np.max(pts1, axis=0))
-        if np.max(pts1, axis=0)[0] - np.min(pts1, axis=0)[0] < 200:
-            # print(
-            #     "Good matches dont cover enough of image: ",
-            #     np.max(pts1, axis=0)[0] - np.min(pts1, axis=0)[0],
-            # )
+        if total_matches < 8:
+            # print("Not enough inliers")
             return False
+
+        if debug:
+            inlier_matches = [
+                good_matches[i] for i in range(len(good_matches)) if inliers[i]
+            ]
+
+            # Plot all SIFT features
+            image1_with_features = cv2.drawKeypoints(
+                image1,
+                keypoints1,
+                None,
+                flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS,
+            )
+            image2_with_features = cv2.drawKeypoints(
+                image2,
+                keypoints2,
+                None,
+                flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS,
+            )
+
+            plt.figure(figsize=(15, 5))
+            plt.subplot(1, 2, 1)
+            plt.imshow(cv2.cvtColor(image1_with_features, cv2.COLOR_BGR2RGB))
+            plt.axis("off")
+            plt.title("SIFT Features: Image 1")
+
+            plt.subplot(1, 2, 2)
+            plt.imshow(cv2.cvtColor(image2_with_features, cv2.COLOR_BGR2RGB))
+            plt.axis("off")
+            plt.title("SIFT Features: Image 2")
+
+            plt.show()
+
+            # Plot inlier matches
+            matched_image = cv2.drawMatches(
+                image1,
+                keypoints1,
+                image2,
+                keypoints2,
+                inlier_matches,
+                None,
+                flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS,
+            )
+
+            matched_image = cv2.cvtColor(matched_image, cv2.COLOR_BGR2RGB)
+            plt.figure(figsize=(15, 10))
+            plt.imshow(matched_image)
+            plt.axis("off")
+            plt.title(f"Inlier Matches: {len(inlier_matches)}")
+            plt.show()
 
         return True
 
@@ -459,4 +542,6 @@ class MazeGraph:
 if __name__ == "__main__":
 
     m = MazeGraph()
-    m.init_navigation("data/midterm_data/images/image_5475.png")
+    # m.init_navigation("data/midterm_data/images/image_5475.png")
+    m.loop_detection()
+    # print(m.match_and_check_epipolar_geometry(6852, 288))
