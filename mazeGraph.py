@@ -8,7 +8,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import torch
 from PIL import Image
-
+from pathlib import Path
 from netVlad import NetVLADPipeline
 
 # Maybe we should consider having 2 thresholds. One for similarity between consecutive images, and one for determining loop closure
@@ -17,11 +17,10 @@ threshold_loop = 0.015
 MANUAL_CHECK = True
 
 sift = cv2.SIFT_create()
-import torch
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = NetVLADPipeline("netvlad_maze.pth")
-model.to(device)
+# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# model = NetVLADPipeline("netvlad_maze.pth")
+# model.to(device)
 
 
 class Node:
@@ -38,15 +37,12 @@ class Node:
         return False
 
 
-from pathlib import Path
-
-
 class MazeGraph:
     def __init__(self, rebuild=False):
         self.folder_path = "data/midterm_data"
         self.data_path = self.folder_path + "/images/"
-        self.pickle_path = self.folder_path + "/pickles_netVlad/"
-        self.img_prefix = "image_"
+        self.pickle_path = self.folder_path + "/pickles/"
+        self.img_prefix = "image_"  # image_
         self.img_extension = ".png"
 
         self.graph = nx.Graph()
@@ -67,10 +63,10 @@ class MazeGraph:
         self.codebook_pickle_path = self.pickle_path + "codebook.pkl"
 
         # Rebuild codebook if needed
-        # if Path(self.codebook_pickle_path).is_file() and not rebuild:
-        #     self.codebook = pickle.load(open(self.codebook_pickle_path, "rb"))
-        # else:
-        #     self.compute_codebook()
+        if Path(self.codebook_pickle_path).is_file() and not rebuild:
+            self.codebook = pickle.load(open(self.codebook_pickle_path, "rb"))
+        else:
+            self.compute_codebook()
 
         # Rebuild all if graph pickle is not available
         if Path(self.graph_pickle_path).is_file() and not rebuild:
@@ -90,6 +86,7 @@ class MazeGraph:
             self.ballTree = pickle.load(open(self.balltree_pickle_path, "rb"))
         else:
             self.ballTree = BallTree(self.node_vlads, leaf_size=40, metric="euclidean")
+
         # self.loop_detection()
         # self.save_all_files()
         # self.clean_graph()
@@ -129,7 +126,7 @@ class MazeGraph:
     def init_navigation(self, target_img) -> None:
         if not self.created_video:
             self.current_node = self.nodes[0]
-            self.target_vlad = self.get_netVLAD_features(target_img)
+            self.target_vlad = self.get_VLAD2(target_img)
 
             _, self.target_node_index = self.ballTree.query(
                 self.target_vlad.reshape(1, -1), 1
@@ -140,7 +137,121 @@ class MazeGraph:
                 self.graph, self.current_node.id, self.target_node_id
             )
             self.create_path_video(self.path_to_target)
+            id_to_node = {node.id: node for node in self.nodes}
+
+            # Reorder nodes to match id_list
+            self.path_to_target_nodes = [
+                id_to_node[i] for i in self.path_to_target if i in id_to_node
+            ]
+            self.path_to_target_vlads = [
+                node.vlad for node in self.path_to_target_nodes
+            ]
+            self.path_to_target_ballTree = BallTree(
+                self.path_to_target_vlads, leaf_size=40
+            )
+            self.frames_since_last_next_best = 10
+            self.next_best = None
             self.created_video = True
+
+    def find_correct_pose(
+        self, rotation1, rotation2, translation, pts1, pts2, camera_matrix
+    ):
+        # Create projection matrices for the first camera (at the origin)
+        proj_matrix1 = np.hstack((np.eye(3), np.zeros((3, 1))))
+
+        # Generate projection matrices for the second camera with all combinations of R and t
+        possible_poses = [
+            np.hstack((rotation1, translation)),
+            np.hstack((rotation1, -translation)),
+            np.hstack((rotation2, translation)),
+            np.hstack((rotation2, -translation)),
+        ]
+
+        # Triangulate points and check which pose is correct
+        max_positive_depth = 0
+        correct_pose = None
+
+        for pose in possible_poses:
+            # Compute the projection matrix for the second camera
+            proj_matrix2 = camera_matrix @ pose
+
+            # Triangulate points
+            points_4d_hom = cv2.triangulatePoints(
+                camera_matrix @ proj_matrix1, proj_matrix2, pts1.T, pts2.T
+            )
+
+            # Convert homogeneous coordinates to 3D
+            points_3d = points_4d_hom[:3] / points_4d_hom[3]
+
+            # Check positive depth (z > 0) in both camera coordinate systems
+            depth_cam1 = points_3d[2]  # Z-coordinates in the first camera
+            depth_cam2 = (
+                pose[:, :3] @ points_3d + pose[:, 3:4]
+            )  # Z-coordinates in the second camera
+
+            positive_depth_count = np.sum((depth_cam1 > 0) & (depth_cam2[2] > 0))
+
+            # Update the best pose if more points have positive depth
+            if positive_depth_count > max_positive_depth:
+                max_positive_depth = positive_depth_count
+                correct_pose = pose
+
+        return correct_pose
+
+    def annotate_frame(self, frame):
+        # Step 0: Extract VLAD features and find the closest path node
+        if self.frames_since_last_next_best == 10:
+            frame_vlad = self.get_VLAD2(frame)
+            dists, ids = self.path_to_target_ballTree.query(
+                frame_vlad.reshape(1, -1), 1
+            )
+            next_id = self.path_to_target_nodes[
+                min(ids[0][0] + 5, len(self.path_to_target) - 1)
+            ].id
+            path2 = f"{self.data_path}{self.img_prefix}{next_id}{self.img_extension}"
+
+            image2 = cv2.imread(path2)
+            self.next_best = cv2.cvtColor(image2, cv2.COLOR_BGR2RGB)
+            cv2.imwrite("next_best.jpg", self.next_best)
+            self.frames_since_last_next_best = 0
+        if self.next_best is None:
+            return
+        self.frames_since_last_next_best += 1
+
+        # Step 1: Detect SIFT features and compute descriptors
+        keypoints1, descriptors1 = sift.detectAndCompute(frame, None)
+        keypoints2, descriptors2 = sift.detectAndCompute(self.next_best, None)
+
+        # Increase keypoint scale and add color-SIFT features
+        for kp in keypoints1:
+            kp.size *= 2
+        descriptors1 = sift.compute(frame, keypoints1)[1] + self.compute_color_sift(
+            frame, keypoints1
+        )
+        for kp in keypoints2:
+            kp.size *= 2
+        descriptors2 = sift.compute(self.next_best, keypoints2)[
+            1
+        ] + self.compute_color_sift(self.next_best, keypoints2)
+
+        # Step 2: Match descriptors using FLANN matcher
+        index_params = dict(algorithm=1, trees=5)
+        search_params = dict(checks=50)
+        flann = cv2.FlannBasedMatcher(index_params, search_params)
+        matches = flann.knnMatch(descriptors1, descriptors2, k=2)
+
+        # Step 3: Apply Lowe's ratio test to filter matches
+        good_matches = [m for m, n in matches if m.distance < 0.75 * n.distance]
+        if len(good_matches) == 0:
+            # print("Lost track")
+            return
+        matched_keypoints = [keypoints1[m.queryIdx] for m in good_matches]
+        cv2.drawKeypoints(
+            frame,
+            matched_keypoints,
+            frame,
+            flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS,
+        )
 
     def add_node(self, vlad, id) -> Node:
         node = Node(vlad, id)
@@ -402,8 +513,8 @@ class MazeGraph:
         for ix in range(0, int(len(files) / 4)):
             i = ix * 4
             path = f"{self.data_path}{self.img_prefix}{i}{self.img_extension}"
-            # img = cv2.imread(path)
-            self.add_frame(self.get_netVLAD_features(path), i)
+            img = cv2.imread(path)
+            self.add_frame(self.get_VLAD2(img), i)
 
         self.loop_detection()
         self.save_all_files()
@@ -522,7 +633,10 @@ class MazeGraph:
         """
         from torchvision.transforms import Compose, Resize, ToTensor, Normalize
 
-        img = Image.open(path).convert("RGB")
+        if isinstance(path, str):
+            img = Image.open(path).convert("RGB")
+        else:
+            img = Image.fromarray(path)
         # Define preprocessing transformations
         preprocess = Compose(
             [
@@ -542,6 +656,7 @@ class MazeGraph:
 if __name__ == "__main__":
 
     m = MazeGraph()
-    # m.init_navigation("data/midterm_data/images/image_5475.png")
-    m.loop_detection()
+    img = cv2.imread("data/midterm_data/images/image_5475.png")
+    m.init_navigation(img)
+    # m.loop_detection()
     # print(m.match_and_check_epipolar_geometry(6852, 288))

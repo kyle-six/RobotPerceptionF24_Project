@@ -7,7 +7,10 @@ import numpy as np
 import os
 from sklearn.neighbors import BallTree
 from tqdm import tqdm
-from natsort import natsorted
+import sys
+
+sys.path.append("../startup.json")
+# from natsort import natsorted
 
 import logging
 
@@ -35,6 +38,7 @@ class KeyboardPlayerPyGame(Player):
 
         # Builds Graph, if it doesn't exist
         self.mazeGraph = MazeGraph()
+        self.got_target = False
 
     def reset(self):
         # Reset the player state
@@ -166,6 +170,7 @@ class KeyboardPlayerPyGame(Player):
 
         ######## Calculate shortest path and create video from target image
         self.mazeGraph.init_navigation(self.get_target_images()[0])
+        self.got_target = True
 
     def set_target_images(self, images):
         """
@@ -239,6 +244,8 @@ class KeyboardPlayerPyGame(Player):
                     self.show_target_images()
 
         # Display the first-person view image on the pygame screen
+        if self.got_target:
+            self.mazeGraph.annotate_frame(fpv)
         rgb = convert_opencv_img_to_pygame(fpv)
         self.screen.blit(rgb, (0, 0))
         pygame.display.update()
