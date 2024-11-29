@@ -14,6 +14,9 @@ from natsort import natsorted
 import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
+# TEST line detection and drawing
+from test_img_processing import detect_draw_lines
+
 
 # Define a class for a player controlled by keyboard input using pygame
 class KeyboardPlayerPyGame(Player):
@@ -348,6 +351,7 @@ class KeyboardPlayerPyGame(Player):
                 # If 'q' key is pressed, then display the next best view based on the current FPV
                 if keys[pygame.K_q]:
                     self.display_next_best_view()
+            detect_draw_lines(fpv)
 
         # Display the first-person view image on the pygame screen
         rgb = convert_opencv_img_to_pygame(fpv)
