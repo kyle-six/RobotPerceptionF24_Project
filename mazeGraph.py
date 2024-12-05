@@ -12,8 +12,8 @@ from pathlib import Path
 from netVlad import NetVLADPipeline
 
 # Maybe we should consider having 2 thresholds. One for similarity between consecutive images, and one for determining loop closure
-threshold = 0.013
-threshold_loop = 0.015
+threshold = 1.35
+threshold_loop = 1.25
 MANUAL_CHECK = True
 
 sift = cv2.SIFT_create()
@@ -39,7 +39,7 @@ class Node:
 
 class MazeGraph:
     def __init__(self, rebuild=False):
-        self.folder_path = "data/midterm_data"
+        self.folder_path = "data/"
         self.data_path = self.folder_path + "/images/"
         self.pickle_path = self.folder_path + "/pickles/"
         self.img_prefix = "image_"  # image_
@@ -59,7 +59,7 @@ class MazeGraph:
         self.node_list_path = self.pickle_path + "node_list.pickle"
         self.node_vlads_list_path = self.pickle_path + "node_vlad_list.pickle"
         self.balltree_pickle_path = self.pickle_path + "graph_balltree.pickle"
-        self.path_video_path = self.folder_path + "/out_netVlad/path_video.mp4"
+        self.path_video_path = self.folder_path + "/path_video.mp4"
         self.codebook_pickle_path = self.pickle_path + "codebook.pkl"
 
         # Rebuild codebook if needed
@@ -85,10 +85,10 @@ class MazeGraph:
         if Path(self.balltree_pickle_path).is_file():
             self.ballTree = pickle.load(open(self.balltree_pickle_path, "rb"))
         else:
-            self.ballTree = BallTree(self.node_vlads, leaf_size=40, metric="euclidean")
+            self.ballTree = BallTree(self.node_vlads, leaf_size=40)
 
         # self.loop_detection()
-        # self.save_all_files()
+        self.save_all_files()
         # self.clean_graph()
         # self.save_all_files
 
@@ -211,7 +211,7 @@ class MazeGraph:
             path2 = f"{self.data_path}{self.img_prefix}{next_id}{self.img_extension}"
 
             image2 = cv2.imread(path2)
-            self.next_best = cv2.cvtColor(image2, cv2.COLOR_BGR2RGB)
+            self.next_best = image2
             cv2.imwrite("next_best.jpg", self.next_best)
             self.frames_since_last_next_best = 0
         if self.next_best is None:
@@ -330,7 +330,7 @@ class MazeGraph:
         return descriptors
 
     def match_and_check_epipolar_geometry(
-        self, id1, id2, inlier_threshold=0.75, debug=False
+        self, id1, id2, inlier_threshold=0.75, debug=True
     ):
         path1 = f"{self.data_path}{self.img_prefix}{id1}{self.img_extension}"
         image1 = cv2.imread(path1)
@@ -364,7 +364,7 @@ class MazeGraph:
                 good_matches.append(m)
 
         # If there are not enough good matches, return False
-        if len(good_matches) < 15:
+        if len(good_matches) < 15: #check every image to know the no of descriptors for each image
             # print("Not enough matches")
             return False
 
@@ -460,7 +460,7 @@ class MazeGraph:
         return True
 
     def loop_detection(self) -> None:
-        num_neighbors = 20  # Increased from 4
+        num_neighbors = 4  # Increased from 4
         id_difference_threshold = 15  # Reduced from 25
         self.ballTree = BallTree(self.node_vlads, leaf_size=40, metric="euclidean")
         self.save_all_files()
@@ -469,6 +469,7 @@ class MazeGraph:
             distances, indices = self.ballTree.query(
                 node.vlad.reshape(1, -1), num_neighbors
             )
+            print(node.id)
 
             for i in range(1, num_neighbors):
                 candidate_id = self.nodes[indices[0][i]].id
@@ -479,20 +480,21 @@ class MazeGraph:
                     and candidate_dist < threshold_loop
                     and not self.graph.has_edge(candidate_id, node.id)
                 ):
+                    print(self.match_and_check_epipolar_geometry(candidate_id, node.id))
+                    #if self.match_and_check_epipolar_geometry(candidate_id, node.id):
 
-                    if self.match_and_check_epipolar_geometry(candidate_id, node.id):
-
-                        if MANUAL_CHECK:
-                            print(
-                                f"Evaluating potential loop closure between nodes {node.id} and {candidate_id}"
-                            )
-                            if self.approve_potential_loop(candidate_id, node.id):
-                                self.graph.add_edge(candidate_id, node.id)
-                                print(f"Loop: {node.id} -> {candidate_id}")
-                        else:
+                    if MANUAL_CHECK:
+                        print(
+                            f"Evaluating potential loop closure between nodes {node.id} and {candidate_id}"
+                        )
+                        if self.approve_potential_loop(candidate_id, node.id):
                             self.graph.add_edge(candidate_id, node.id)
                             print(f"Loop: {node.id} -> {candidate_id}")
-
+                    else:
+                        self.graph.add_edge(candidate_id, node.id)
+                        print(f"Loop: {node.id} -> {candidate_id}")
+        self.save_all_files()
+    
     def compute_codebook(self) -> None:
         files = os.listdir(self.data_path)
         sift_descriptors = list()
@@ -656,7 +658,7 @@ class MazeGraph:
 if __name__ == "__main__":
 
     m = MazeGraph()
-    img = cv2.imread("data/midterm_data/images/image_5475.png")
+    img = cv2.imread("data/images/image_6800.png")
     m.init_navigation(img)
     # m.loop_detection()
     # print(m.match_and_check_epipolar_geometry(6852, 288))
