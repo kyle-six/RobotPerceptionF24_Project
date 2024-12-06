@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import torch
 from PIL import Image
 from pathlib import Path
-from netVlad import NetVLADPipeline
+# from netVlad import NetVLADPipeline
 
 # Maybe we should consider having 2 thresholds. One for similarity between consecutive images, and one for determining loop closure
 threshold = 1.35
@@ -40,9 +40,9 @@ class Node:
 class MazeGraph:
     def __init__(self, rebuild=False):
         self.folder_path = "data/"
-        self.data_path = self.folder_path + "/images/"
-        self.pickle_path = self.folder_path + "/pickles/"
-        self.img_prefix = "image_"  # image_
+        self.data_path = "images/"
+        self.pickle_path = "pickles/"
+        self.img_prefix = "image_"  # just numbers in exploration phase
         self.img_extension = ".png"
 
         self.graph = nx.Graph()
@@ -85,7 +85,7 @@ class MazeGraph:
         if Path(self.balltree_pickle_path).is_file():
             self.ballTree = pickle.load(open(self.balltree_pickle_path, "rb"))
         else:
-            self.ballTree = BallTree(self.node_vlads, leaf_size=40)
+            self.ballTree = BallTree(self.node_vlads, leaf_size = 65, metric='euclidean')  # maybe use leaf size of around 60 - 80 as VLAD featuers are high-dimensional
 
         # self.loop_detection()
         self.save_all_files()
@@ -147,7 +147,7 @@ class MazeGraph:
                 node.vlad for node in self.path_to_target_nodes
             ]
             self.path_to_target_ballTree = BallTree(
-                self.path_to_target_vlads, leaf_size=40
+                self.path_to_target_vlads, leaf_size = 65, metric="euclidean"       # just like before we change this to 65
             )
             self.frames_since_last_next_best = 10
             self.next_best = None
@@ -326,30 +326,40 @@ class MazeGraph:
         # Convert image to HSV color space
         hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         hue = hsv_image[:, :, 0]
-        _, descriptors = sift.compute(hue, Keypoints)
+        _, descriptors = sift.compute(hue, Keypoints)   
+
+        # maybe use saturation to ignore low saturation regions areas that are close to grayscale basically
+        # saturation = hsv_image[:, :, 1]
+
+        # # Handle low saturation areas (optional)
+        # low_sat_mask = saturation < 30  # Example threshold
+        # if np.any(low_sat_mask):
+        #     descriptors[low_sat_mask] = 0  # Filter or adjust low-saturation descriptors
+    
         return descriptors
 
     def match_and_check_epipolar_geometry(
         self, id1, id2, inlier_threshold=0.75, debug=True
     ):
         path1 = f"{self.data_path}{self.img_prefix}{id1}{self.img_extension}"
-        image1 = cv2.imread(path1)
         path2 = f"{self.data_path}{self.img_prefix}{id2}{self.img_extension}"
+        image1 = cv2.imread(path1)
         image2 = cv2.imread(path2)
 
         # Step 1: Detect SIFT features and compute descriptors
         keypoints1, descriptors1 = sift.detectAndCompute(image1, None)
         keypoints2, descriptors2 = sift.detectAndCompute(image2, None)
 
-        for kp in keypoints1:
-            kp.size *= 2  # Increase the scale factor
-        descriptors1 = sift.compute(image1, keypoints1)[1]
-        for kp in keypoints2:
-            kp.size *= 2  # Increase the scale factor
-        descriptors2 = sift.compute(image2, keypoints2)[1]
+        if descriptors1 is None or descriptors2 is None:
+            return False
 
-        descriptors1 += self.compute_color_sift(image1, keypoints1)
-        descriptors2 += self.compute_color_sift(image2, keypoints2)
+        # Add hue channel descriptors
+        hue_descriptors1 = self.compute_color_sift(image1, keypoints1)
+        hue_descriptors2 = self.compute_color_sift(image2, keypoints2)
+        if hue_descriptors1 is not None:
+            descriptors1 += hue_descriptors1
+        if hue_descriptors2 is not None:
+            descriptors2 += hue_descriptors2
 
         # Step 2: Match descriptors using FLANN matcher
         index_params = dict(algorithm=1, trees=5)  # KD-Tree algorithm
@@ -357,112 +367,64 @@ class MazeGraph:
         flann = cv2.FlannBasedMatcher(index_params, search_params)
         matches = flann.knnMatch(descriptors1, descriptors2, k=2)
 
-        # Step 3: Apply Lowe's ratio test to filter matches
-        good_matches = []
-        for m, n in matches:
-            if m.distance < 0.75 * n.distance:
-                good_matches.append(m)
+        if not matches:
+            return False
 
-        # If there are not enough good matches, return False
-        if len(good_matches) < 15: #check every image to know the no of descriptors for each image
-            # print("Not enough matches")
+        # Step 3: Apply Lowe's ratio test to filter matches
+        ratio_threshold = 0.75
+        good_matches = [m for m, n in matches if m.distance < ratio_threshold * n.distance]
+
+        # Minimum match threshold
+        min_matches_threshold = max(10, 0.005 * len(matches))
+        if len(good_matches) < min_matches_threshold:
             return False
 
         # Step 4: Compute the fundamental matrix with RANSAC
         pts1 = np.float32([keypoints1[m.queryIdx].pt for m in good_matches])
         pts2 = np.float32([keypoints2[m.trainIdx].pt for m in good_matches])
-
         fundamental_matrix, inliers = cv2.findFundamentalMat(
-            pts1, pts2, cv2.FM_RANSAC, 1.0, 0.99
+            pts1, pts2, cv2.FM_RANSAC, 1.5, 0.99
         )
         if fundamental_matrix is None or fundamental_matrix.shape != (3, 3):
             return False
-        # Step 4: Decompose the essential matrix into rotation and translation
 
+        # Step 5: Validate rotation and translation
         camera_matrix = np.array([[92, 0, 160], [0, 92, 120], [0, 0, 1]])
         essential_matrix = camera_matrix.T @ fundamental_matrix @ camera_matrix
         rotation1, rotation2, translation = cv2.decomposeEssentialMat(essential_matrix)
-
-        # Validate both possible decompositions
         motion_valid1 = self.is_valid_motion(rotation1, translation)
-        motion_valid2 = self.is_valid_motion(
-            rotation2, -translation
-        )  # Translation sign is ambiguous
+        motion_valid2 = self.is_valid_motion(rotation2, -translation)
 
         if not (motion_valid1 or motion_valid2):
-            # print("No valid planar motion found")
             return False
 
-        # Step 5: Count the inliers
+        # Step 6: Check inlier ratio
         inlier_count = np.sum(inliers)
         total_matches = len(good_matches)
         inlier_ratio = inlier_count / total_matches
-
-        # Check if the inlier ratio is above the threshold
         if inlier_ratio < inlier_threshold:
-            # print("inlier ratio: ", inlier_ratio)
             return False
 
-        if total_matches < 8:
-            # print("Not enough inliers")
-            return False
-
+        # Debug: Visualize matches
         if debug:
+            print(f"Matches: {len(good_matches)}, Inlier Ratio: {inlier_ratio}")
             inlier_matches = [
                 good_matches[i] for i in range(len(good_matches)) if inliers[i]
             ]
-
-            # Plot all SIFT features
-            image1_with_features = cv2.drawKeypoints(
-                image1,
-                keypoints1,
-                None,
-                flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS,
-            )
-            image2_with_features = cv2.drawKeypoints(
-                image2,
-                keypoints2,
-                None,
-                flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS,
-            )
-
-            plt.figure(figsize=(15, 5))
-            plt.subplot(1, 2, 1)
-            plt.imshow(cv2.cvtColor(image1_with_features, cv2.COLOR_BGR2RGB))
-            plt.axis("off")
-            plt.title("SIFT Features: Image 1")
-
-            plt.subplot(1, 2, 2)
-            plt.imshow(cv2.cvtColor(image2_with_features, cv2.COLOR_BGR2RGB))
-            plt.axis("off")
-            plt.title("SIFT Features: Image 2")
-
-            plt.show()
-
-            # Plot inlier matches
             matched_image = cv2.drawMatches(
-                image1,
-                keypoints1,
-                image2,
-                keypoints2,
-                inlier_matches,
-                None,
-                flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS,
+                image1, keypoints1, image2, keypoints2, inlier_matches, None
             )
-
-            matched_image = cv2.cvtColor(matched_image, cv2.COLOR_BGR2RGB)
-            plt.figure(figsize=(15, 10))
-            plt.imshow(matched_image)
+            plt.imshow(cv2.cvtColor(matched_image, cv2.COLOR_BGR2RGB))
             plt.axis("off")
-            plt.title(f"Inlier Matches: {len(inlier_matches)}")
             plt.show()
 
         return True
 
+
     def loop_detection(self) -> None:
-        num_neighbors = 4  # Increased from 4
-        id_difference_threshold = 15  # Reduced from 25
-        self.ballTree = BallTree(self.node_vlads, leaf_size=40, metric="euclidean")
+        num_neighbors = 7  # Increased from 4
+        id_difference_threshold = 23  # Changed this due to long corridors, avoid detecting false loops between node that are vizually similar but close in sequence 
+        self.ballTree = BallTree(self.node_vlads, leaf_size=65, metric="euclidean")
         self.save_all_files()
         # Look for loops
         for node in self.nodes:
@@ -506,8 +468,8 @@ class MazeGraph:
             _, des = sift.detectAndCompute(img, None)
             sift_descriptors.extend(des)
         self.codebook = KMeans(
-            n_clusters=1024, init="k-means++", n_init=10, verbose=1
-        ).fit(sift_descriptors)
+            n_clusters = 3000, init="k-means++", n_init=10, verbose=1
+        ).fit(sift_descriptors)     # k = sqrt(N*d) N is number of images d is average number of SIFT descriptors per image, changed from 1024
         pickle.dump(self.codebook, open("codebook.pkl", "wb"))
 
     def create_graph(self) -> nx.Graph:
@@ -562,9 +524,21 @@ class MazeGraph:
         if len(self.graph.nodes()) == 0:
             self.current_node = self.add_node(vlad, id)
             return
-        distance = np.linalg.norm(self.current_node.vlad - vlad)
-        # New Node
-        if distance > threshold:
+
+        # distance = np.linalg.norm(self.current_node.vlad - vlad)
+        # # New Node
+        # if distance > threshold:
+        #     self.current_node = self.add_node(vlad, id)
+        
+        # Create or update BallTree using existing VLADs
+        if len(self.node_vlads) > 0:
+            self.ballTree = BallTree(self.node_vlads, leaf_size=65, metric="euclidean")
+
+        # Query the BallTree for the closest node using Euclidean distance
+        distance, _ = self.ballTree.query(vlad.reshape(1, -1), k=1)
+
+        # Check if the distance is above the threshold to add a new node
+        if distance[0][0] > threshold:
             self.current_node = self.add_node(vlad, id)
 
     def rebuild_nodelist(self) -> None:
@@ -629,30 +603,30 @@ class MazeGraph:
 
         return VLAD_feature
 
-    def get_netVLAD_features(self, path):
-        """
-        Extract VLAD features using a pretrained NetVLAD model.
-        """
-        from torchvision.transforms import Compose, Resize, ToTensor, Normalize
+    # def get_netVLAD_features(self, path):
+    #     """
+    #     Extract VLAD features using a pretrained NetVLAD model.
+    #     """
+    #     from torchvision.transforms import Compose, Resize, ToTensor, Normalize
 
-        if isinstance(path, str):
-            img = Image.open(path).convert("RGB")
-        else:
-            img = Image.fromarray(path)
-        # Define preprocessing transformations
-        preprocess = Compose(
-            [
-                Resize((224, 224)),  # Resize to model input size
-                ToTensor(),
-                Normalize(mean=[0.6537, 0.6355, 0.6409], std=[0.3719, 0.3697, 0.3589]),
-            ]
-        )
+    #     if isinstance(path, str):
+    #         img = Image.open(path).convert("RGB")
+    #     else:
+    #         img = Image.fromarray(path)
+    #     # Define preprocessing transformations
+    #     preprocess = Compose(
+    #         [
+    #             Resize((224, 224)),  # Resize to model input size
+    #             ToTensor(),
+    #             Normalize(mean=[0.6537, 0.6355, 0.6409], std=[0.3719, 0.3697, 0.3589]),
+    #         ]
+    #     )
 
-        img = preprocess(img).unsqueeze(0).to(device)  # Add batch dimension
+    #     img = preprocess(img).unsqueeze(0).to(device)  # Add batch dimension
 
-        with torch.no_grad():
-            vlad_features = model(img)  # Extract NetVLAD features
-        return vlad_features.to(device).numpy().flatten()
+    #     with torch.no_grad():
+    #         vlad_features = model(img)  # Extract NetVLAD features
+    #     return vlad_features.to(device).numpy().flatten()
 
 
 if __name__ == "__main__":
@@ -662,3 +636,4 @@ if __name__ == "__main__":
     m.init_navigation(img)
     # m.loop_detection()
     # print(m.match_and_check_epipolar_geometry(6852, 288))
+
