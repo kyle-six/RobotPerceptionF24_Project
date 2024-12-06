@@ -9,18 +9,22 @@ import matplotlib.pyplot as plt
 import torch
 from PIL import Image
 from pathlib import Path
-from netVlad import NetVLADPipeline
 
-# Maybe we should consider having 2 thresholds. One for similarity between consecutive images, and one for determining loop closure
-threshold = 0.013
-threshold_loop = 0.015
-MANUAL_CHECK = True
+# Create Initial Graph:
+SEQUENTIAL_VLAD_DISTANCE_TRESHHOLD = 1.35
+
+# Loop Canidate suggestion:
+NUM_NEIGHBORS_IN_QUERY = 20
+VLAD_DISTANCE_TRESHHOLD = 1.4
+ID_DIFFERENCE_TRESHHOLD = 15
+MIN_PATH_LENGTH_TRESHHOLD = 10
+
+# Epipolar Matching:
+INLIER_RATIO_TRESHHOLD = 0.7
+NR_GOOD_MATCHES = 10
+INLIER_COUNT_TRESHHOLD = 8
 
 sift = cv2.SIFT_create()
-
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# model = NetVLADPipeline("netvlad_maze.pth")
-# model.to(device)
 
 
 class Node:
@@ -85,7 +89,7 @@ class MazeGraph:
         if Path(self.balltree_pickle_path).is_file():
             self.ballTree = pickle.load(open(self.balltree_pickle_path, "rb"))
         else:
-            self.ballTree = BallTree(self.node_vlads, leaf_size=40, metric="euclidean")
+            self.ballTree = BallTree(self.node_vlads, leaf_size=65, metric="euclidean")
 
         # self.loop_detection()
         # self.save_all_files()
@@ -147,56 +151,11 @@ class MazeGraph:
                 node.vlad for node in self.path_to_target_nodes
             ]
             self.path_to_target_ballTree = BallTree(
-                self.path_to_target_vlads, leaf_size=40
+                self.path_to_target_vlads, leaf_size=65
             )
             self.frames_since_last_next_best = 10
             self.next_best = None
             self.created_video = True
-
-    def find_correct_pose(
-        self, rotation1, rotation2, translation, pts1, pts2, camera_matrix
-    ):
-        # Create projection matrices for the first camera (at the origin)
-        proj_matrix1 = np.hstack((np.eye(3), np.zeros((3, 1))))
-
-        # Generate projection matrices for the second camera with all combinations of R and t
-        possible_poses = [
-            np.hstack((rotation1, translation)),
-            np.hstack((rotation1, -translation)),
-            np.hstack((rotation2, translation)),
-            np.hstack((rotation2, -translation)),
-        ]
-
-        # Triangulate points and check which pose is correct
-        max_positive_depth = 0
-        correct_pose = None
-
-        for pose in possible_poses:
-            # Compute the projection matrix for the second camera
-            proj_matrix2 = camera_matrix @ pose
-
-            # Triangulate points
-            points_4d_hom = cv2.triangulatePoints(
-                camera_matrix @ proj_matrix1, proj_matrix2, pts1.T, pts2.T
-            )
-
-            # Convert homogeneous coordinates to 3D
-            points_3d = points_4d_hom[:3] / points_4d_hom[3]
-
-            # Check positive depth (z > 0) in both camera coordinate systems
-            depth_cam1 = points_3d[2]  # Z-coordinates in the first camera
-            depth_cam2 = (
-                pose[:, :3] @ points_3d + pose[:, 3:4]
-            )  # Z-coordinates in the second camera
-
-            positive_depth_count = np.sum((depth_cam1 > 0) & (depth_cam2[2] > 0))
-
-            # Update the best pose if more points have positive depth
-            if positive_depth_count > max_positive_depth:
-                max_positive_depth = positive_depth_count
-                correct_pose = pose
-
-        return correct_pose
 
     def annotate_frame(self, frame):
         # Step 0: Extract VLAD features and find the closest path node
@@ -284,12 +243,14 @@ class MazeGraph:
                 plt.close(fig)
 
         fig, axs = plt.subplots(1, 2)
+        fig.set_figheight(10)
+        fig.set_figwidth(15)
         axs[0].imshow(img1)
         axs[1].imshow(img2)
 
         axs[0].set_axis_off()
         axs[1].set_axis_off()
-
+        plt.title(f"Evaluate loop between {id1} and {id2}")
         fig.canvas.mpl_connect("key_press_event", on_key)
         plt.show(block=True)
 
@@ -329,9 +290,7 @@ class MazeGraph:
         _, descriptors = sift.compute(hue, Keypoints)
         return descriptors
 
-    def match_and_check_epipolar_geometry(
-        self, id1, id2, inlier_threshold=0.75, debug=False
-    ):
+    def match_and_check_epipolar_geometry(self, id1, id2, debug=True):
         path1 = f"{self.data_path}{self.img_prefix}{id1}{self.img_extension}"
         image1 = cv2.imread(path1)
         path2 = f"{self.data_path}{self.img_prefix}{id2}{self.img_extension}"
@@ -364,8 +323,8 @@ class MazeGraph:
                 good_matches.append(m)
 
         # If there are not enough good matches, return False
-        if len(good_matches) < 15:
-            # print("Not enough matches")
+        if len(good_matches) < NR_GOOD_MATCHES:
+            # print("Not enough matches: ", len(good_matches))
             return False
 
         # Step 4: Compute the fundamental matrix with RANSAC
@@ -375,36 +334,14 @@ class MazeGraph:
         fundamental_matrix, inliers = cv2.findFundamentalMat(
             pts1, pts2, cv2.FM_RANSAC, 1.0, 0.99
         )
-        if fundamental_matrix is None or fundamental_matrix.shape != (3, 3):
-            return False
-        # Step 4: Decompose the essential matrix into rotation and translation
-
-        camera_matrix = np.array([[92, 0, 160], [0, 92, 120], [0, 0, 1]])
-        essential_matrix = camera_matrix.T @ fundamental_matrix @ camera_matrix
-        rotation1, rotation2, translation = cv2.decomposeEssentialMat(essential_matrix)
-
-        # Validate both possible decompositions
-        motion_valid1 = self.is_valid_motion(rotation1, translation)
-        motion_valid2 = self.is_valid_motion(
-            rotation2, -translation
-        )  # Translation sign is ambiguous
-
-        if not (motion_valid1 or motion_valid2):
-            # print("No valid planar motion found")
-            return False
 
         # Step 5: Count the inliers
         inlier_count = np.sum(inliers)
-        total_matches = len(good_matches)
-        inlier_ratio = inlier_count / total_matches
+        inlier_ratio = inlier_count / len(good_matches)
 
         # Check if the inlier ratio is above the threshold
-        if inlier_ratio < inlier_threshold:
+        if inlier_ratio < INLIER_RATIO_TRESHHOLD:
             # print("inlier ratio: ", inlier_ratio)
-            return False
-
-        if total_matches < 8:
-            # print("Not enough inliers")
             return False
 
         if debug:
@@ -460,38 +397,38 @@ class MazeGraph:
         return True
 
     def loop_detection(self) -> None:
-        num_neighbors = 20  # Increased from 4
-        id_difference_threshold = 15  # Reduced from 25
-        self.ballTree = BallTree(self.node_vlads, leaf_size=40, metric="euclidean")
-        self.save_all_files()
+        rejected_pairs = []
         # Look for loops
         for node in self.nodes:
             distances, indices = self.ballTree.query(
-                node.vlad.reshape(1, -1), num_neighbors
+                node.vlad.reshape(1, -1), NUM_NEIGHBORS_IN_QUERY
             )
 
-            for i in range(1, num_neighbors):
+            for i in range(1, NUM_NEIGHBORS_IN_QUERY):
                 candidate_id = self.nodes[indices[0][i]].id
                 candidate_dist = distances[0][i]
 
                 if (
-                    abs(candidate_id - node.id) > id_difference_threshold
-                    and candidate_dist < threshold_loop
+                    abs(candidate_id - node.id) > ID_DIFFERENCE_TRESHHOLD
+                    and candidate_dist < VLAD_DISTANCE_TRESHHOLD
                     and not self.graph.has_edge(candidate_id, node.id)
                 ):
-
-                    if self.match_and_check_epipolar_geometry(candidate_id, node.id):
-
-                        if MANUAL_CHECK:
+                    path_length = len(
+                        nx.shortest_path(self.graph, candidate_id, node.id)
+                    )
+                    if not path_length < MIN_PATH_LENGTH_TRESHHOLD:
+                        if self.match_and_check_epipolar_geometry(
+                            candidate_id, node.id, debug=False
+                        ):
                             print(
                                 f"Evaluating potential loop closure between nodes {node.id} and {candidate_id}"
                             )
-                            if self.approve_potential_loop(candidate_id, node.id):
-                                self.graph.add_edge(candidate_id, node.id)
-                                print(f"Loop: {node.id} -> {candidate_id}")
-                        else:
-                            self.graph.add_edge(candidate_id, node.id)
-                            print(f"Loop: {node.id} -> {candidate_id}")
+                            if not (node.id, candidate_id) in rejected_pairs:
+                                if self.approve_potential_loop(candidate_id, node.id):
+                                    self.graph.add_edge(candidate_id, node.id)
+                                    print(f"Loop: {node.id} -> {candidate_id}")
+                                else:
+                                    rejected_pairs.append((candidate_id, node.id))
 
     def compute_codebook(self) -> None:
         files = os.listdir(self.data_path)
@@ -516,6 +453,8 @@ class MazeGraph:
             img = cv2.imread(path)
             self.add_frame(self.get_VLAD2(img), i)
 
+        self.ballTree = BallTree(self.node_vlads, leaf_size=65, metric="euclidean")
+        self.save_all_files()
         self.loop_detection()
         self.save_all_files()
         print(f"Created graph with {self.number_nodes+1} nodes")
@@ -549,7 +488,7 @@ class MazeGraph:
         pickle.dump(self.graph, open(self.graph_pickle_path, "wb"))
         pickle.dump(self.nodes, open(self.node_list_path, "wb"))
         pickle.dump(self.node_vlads, open(self.node_vlads_list_path, "wb"))
-        nx.drawing.nx_pydot.write_dot(self.graph, self.dot_file_path)
+        # nx.drawing.nx_pydot.write_dot(self.graph, self.dot_file_path)
         # outdeg = self.graph.out_degree() TODO
         # to_keep = [n for n in outdeg if outdeg[n] != 1]
         # G.subgraph(to_keep)
@@ -562,7 +501,7 @@ class MazeGraph:
             return
         distance = np.linalg.norm(self.current_node.vlad - vlad)
         # New Node
-        if distance > threshold:
+        if distance > SEQUENTIAL_VLAD_DISTANCE_TRESHHOLD:
             self.current_node = self.add_node(vlad, id)
 
     def rebuild_nodelist(self) -> None:
@@ -656,7 +595,7 @@ class MazeGraph:
 if __name__ == "__main__":
 
     m = MazeGraph()
-    img = cv2.imread("data/midterm_data/images/image_5475.png")
-    m.init_navigation(img)
+    # img = cv2.imread("data/midterm_data/images/image_5475.png")
+    # m.init_navigation(img)
     # m.loop_detection()
     # print(m.match_and_check_epipolar_geometry(6852, 288))
