@@ -303,6 +303,9 @@ class MazeGraph:
         keypoints1, descriptors1 = sift.detectAndCompute(image1, None)
         keypoints2, descriptors2 = sift.detectAndCompute(image2, None)
 
+        if keypoints1 is None or keypoints2 is None:
+            return False
+
         for kp in keypoints1:
             kp.size *= 2  # Increase the scale factor
         descriptors1 = sift.compute(image1, keypoints1)[1]
