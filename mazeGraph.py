@@ -43,7 +43,7 @@ class Node:
 
 class MazeGraph:
     def __init__(self, rebuild=False):
-        self.folder_path = "data/midterm_data"
+        self.folder_path = "data_maze1"
         self.data_path = self.folder_path + "/images/"
         self.pickle_path = self.folder_path + "/pickles/"
         self.img_prefix = "image_"  # image_
@@ -63,7 +63,7 @@ class MazeGraph:
         self.node_list_path = self.pickle_path + "node_list.pickle"
         self.node_vlads_list_path = self.pickle_path + "node_vlad_list.pickle"
         self.balltree_pickle_path = self.pickle_path + "graph_balltree.pickle"
-        self.path_video_path = self.folder_path + "/out_netVlad/path_video.mp4"
+        self.path_video_path = self.folder_path + "/out/path_video.mp4"
         self.codebook_pickle_path = self.pickle_path + "codebook.pkl"
 
         # Rebuild codebook if needed
@@ -105,6 +105,7 @@ class MazeGraph:
             first_image = cv2.imread(
                 f"{self.data_path}{self.img_prefix}{path_to_target[0]}{self.img_extension}"
             )
+            first_image = cv2.cvtColor(first_image, cv2.COLOR_BGR2RGB)
             height, width, layers = first_image.shape
             size = (width, height)
 
@@ -117,7 +118,7 @@ class MazeGraph:
             img = cv2.imread(
                 f"{self.data_path}{self.img_prefix}{image_id}{self.img_extension}"
             )
-
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             # Resize image if it's not the same size as the video frame size
             if (img.shape[1], img.shape[0]) != size:
                 img = cv2.resize(img, size)
@@ -226,10 +227,10 @@ class MazeGraph:
     def approve_potential_loop(self, id1, id2) -> bool:
         path1 = f"{self.data_path}{self.img_prefix}{id1}{self.img_extension}"
         img1 = cv2.imread(path1)
-        # img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2RGB)
+        img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2RGB)
         path2 = f"{self.data_path}{self.img_prefix}{id2}{self.img_extension}"
         img2 = cv2.imread(path2)
-        # img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
+        img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)
 
         approved = None
 
@@ -293,8 +294,10 @@ class MazeGraph:
     def match_and_check_epipolar_geometry(self, id1, id2, debug=True):
         path1 = f"{self.data_path}{self.img_prefix}{id1}{self.img_extension}"
         image1 = cv2.imread(path1)
+        image1 = cv2.cvtColor(image1, cv2.COLOR_BGR2RGB)
         path2 = f"{self.data_path}{self.img_prefix}{id2}{self.img_extension}"
         image2 = cv2.imread(path2)
+        image2 = cv2.cvtColor(image2, cv2.COLOR_BGR2RGB)
 
         # Step 1: Detect SIFT features and compute descriptors
         keypoints1, descriptors1 = sift.detectAndCompute(image1, None)
@@ -438,10 +441,11 @@ class MazeGraph:
             path = f"{self.data_path}{self.img_prefix}{i}{self.img_extension}"
             print(path)
             img = cv2.imread(path)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             _, des = sift.detectAndCompute(img, None)
             sift_descriptors.extend(des)
         self.codebook = KMeans(
-            n_clusters=1024, init="k-means++", n_init=10, verbose=1
+            n_clusters=1024, init="k-means++", n_init=3, verbose=1
         ).fit(sift_descriptors)
         pickle.dump(self.codebook, open("codebook.pkl", "wb"))
 
@@ -451,6 +455,7 @@ class MazeGraph:
             i = ix * 4
             path = f"{self.data_path}{self.img_prefix}{i}{self.img_extension}"
             img = cv2.imread(path)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             self.add_frame(self.get_VLAD2(img), i)
 
         self.ballTree = BallTree(self.node_vlads, leaf_size=65, metric="euclidean")
@@ -533,6 +538,7 @@ class MazeGraph:
         # Pass the image to sift detector and get keypoints + descriptions
         # Again we only need the descriptors
         _, des = sift.detectAndCompute(img, None)
+        des=des.astype(np.float64)
         # We then predict the cluster labels using the pre-trained codebook
         # Each descriptor is assigned to a cluster, and the predicted cluster label is returned
         pred_labels = self.codebook.predict(des)
