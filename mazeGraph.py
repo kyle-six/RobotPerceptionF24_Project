@@ -158,6 +158,20 @@ class MazeGraph:
             self.next_best = None
             self.created_video = True
 
+    def find_next_best(self, frame):
+        frame_vlad = self.get_VLAD2(frame)
+        dists, ids = self.path_to_target_ballTree.query(
+            frame_vlad.reshape(1, -1), 1
+        )
+        next_id = self.path_to_target_nodes[
+            min(ids[0][0] + 4, len(self.path_to_target) - 1)
+        ].id
+        path = f"{self.data_path}{self.img_prefix}{next_id}{self.img_extension}"
+        image = cv2.imread(path)
+        self.next_best = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        cv2.imwrite("next_best.jpg", self.next_best)
+        self.frames_since_last_next_best = 0
+
     def annotate_frame(self, frame):
         # Step 0: Extract VLAD features and find the closest path node
         if self.frames_since_last_next_best == 10:
