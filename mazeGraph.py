@@ -6,10 +6,10 @@ import os
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-import torch
+#import torch
 from PIL import Image
 from pathlib import Path
-from netVlad import NetVLADPipeline
+#from netVlad import NetVLADPipeline
 
 # Maybe we should consider having 2 thresholds. One for similarity between consecutive images, and one for determining loop closure
 threshold = 0.013
@@ -39,9 +39,9 @@ class Node:
 
 class MazeGraph:
     def __init__(self, rebuild=False):
-        self.folder_path = "data/midterm_data"
-        self.data_path = self.folder_path + "/images/"
-        self.pickle_path = self.folder_path + "/pickles/"
+        self.folder_path = "midterm_data_fixed"
+        self.data_path = self.folder_path + "/exploration_data/images/"
+        self.pickle_path = self.folder_path + "/pickles_omar/pickles/"
         self.img_prefix = "image_"  # image_
         self.img_extension = ".png"
 
@@ -59,13 +59,14 @@ class MazeGraph:
         self.node_list_path = self.pickle_path + "node_list.pickle"
         self.node_vlads_list_path = self.pickle_path + "node_vlad_list.pickle"
         self.balltree_pickle_path = self.pickle_path + "graph_balltree.pickle"
-        self.path_video_path = self.folder_path + "/out_netVlad/path_video.mp4"
+        self.path_video_path = self.folder_path + "/pickles/path_video.mp4"
         self.codebook_pickle_path = self.pickle_path + "codebook.pkl"
 
         # Rebuild codebook if needed
         if Path(self.codebook_pickle_path).is_file() and not rebuild:
             self.codebook = pickle.load(open(self.codebook_pickle_path, "rb"))
         else:
+            print("Hi")
             self.compute_codebook()
 
         # Rebuild all if graph pickle is not available
@@ -198,6 +199,20 @@ class MazeGraph:
 
         return correct_pose
 
+    def find_next_best(self, frame):
+        frame_vlad = self.get_VLAD2(frame)
+        dists, ids = self.path_to_target_ballTree.query(
+            frame_vlad.reshape(1, -1), 1
+        )
+        next_id = self.path_to_target_nodes[
+            min(ids[0][0] + 4, len(self.path_to_target) - 1)
+        ].id
+        path = f"{self.data_path}{self.img_prefix}{next_id}{self.img_extension}"
+        image = cv2.imread(path)
+        self.next_best = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        cv2.imwrite("next_best.jpg", self.next_best)
+        self.frames_since_last_next_best = 0
+    
     def annotate_frame(self, frame):
         # Step 0: Extract VLAD features and find the closest path node
         if self.frames_since_last_next_best == 10:

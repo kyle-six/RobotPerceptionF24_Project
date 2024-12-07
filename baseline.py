@@ -158,8 +158,8 @@ class KeyboardPlayerPyGame(Player):
             stroke,
             line,
         )
-
         cv2.imshow(f"KeyboardPlayer:target_images", concat_img)
+
         cv2.waitKey(1)
 
     def find_shortest_path_AND_create_video(self):
@@ -167,9 +167,11 @@ class KeyboardPlayerPyGame(Player):
         # Return if the target is not set yet
         if targets is None or len(targets) <= 0:
             return
+        
+        #img = cv2.cvtColor(targets[0], cv2.COLOR_BGR2RGB)
 
         ######## Calculate shortest path and create video from target image
-        self.mazeGraph.init_navigation(self.get_target_images()[0])
+        self.mazeGraph.init_navigation(targets[0])
         self.got_target = True
 
     def set_target_images(self, images):
@@ -241,11 +243,14 @@ class KeyboardPlayerPyGame(Player):
                 keys = pygame.key.get_pressed()
                 # If 'q' key is pressed, then display the next best view based on the current FPV
                 if keys[pygame.K_q]:
-                    self.show_target_images()
+                    if self.got_target:
+                        self.mazeGraph.find_next_best(fpv)
+                    #self.show_target_images()
+                    cv2.imshow("Next Best View (4 frames)", self.mazeGraph.next_best)
+                    cv2.waitKey(1)
+                
 
-        # Display the first-person view image on the pygame screen
-        if self.got_target:
-            self.mazeGraph.annotate_frame(fpv)
+        # Display the first-person view image on the pygame screen 
         rgb = convert_opencv_img_to_pygame(fpv)
         self.screen.blit(rgb, (0, 0))
         pygame.display.update()
