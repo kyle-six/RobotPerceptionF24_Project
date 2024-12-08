@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import torch
 from PIL import Image
 from pathlib import Path
+import shutil
 
 # Create Initial Graph:
 SEQUENTIAL_VLAD_DISTANCE_TRESHHOLD = 1.35
@@ -43,7 +44,7 @@ class Node:
 
 class MazeGraph:
     def __init__(self, rebuild=False):
-        self.folder_path = "data_maze1"
+        self.folder_path = "data/final_maze_1"
         self.data_path = self.folder_path + "/images/"
         self.pickle_path = self.folder_path + "/pickles/"
         self.img_prefix = "image_"  # image_
@@ -64,6 +65,7 @@ class MazeGraph:
         self.node_vlads_list_path = self.pickle_path + "node_vlad_list.pickle"
         self.balltree_pickle_path = self.pickle_path + "graph_balltree.pickle"
         self.path_video_path = self.folder_path + "/out/path_video.mp4"
+        self.path_images_path = self.folder_path + "/out_img"
         self.codebook_pickle_path = self.pickle_path + "codebook.pkl"
 
         # Rebuild codebook if needed
@@ -113,12 +115,16 @@ class MazeGraph:
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec for mp4
         out = cv2.VideoWriter(self.path_video_path, fourcc, fps, size)
 
+        shutil.rmtree(self.path_images_path)
+        os.makedirs(self.path_images_path)
+
         # Iterate through the image list and write each image to the video
-        for image_id in self.path_to_target[1:]:
+        for i, image_id in enumerate(self.path_to_target[1:]):
             img = cv2.imread(
                 f"{self.data_path}{self.img_prefix}{image_id}{self.img_extension}"
             )
             img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            cv2.imwrite(f"{self.path_images_path}/{i}.png", img)
             # Resize image if it's not the same size as the video frame size
             if (img.shape[1], img.shape[0]) != size:
                 img = cv2.resize(img, size)
@@ -160,9 +166,7 @@ class MazeGraph:
 
     def find_next_best(self, frame):
         frame_vlad = self.get_VLAD2(frame)
-        dists, ids = self.path_to_target_ballTree.query(
-            frame_vlad.reshape(1, -1), 1
-        )
+        dists, ids = self.path_to_target_ballTree.query(frame_vlad.reshape(1, -1), 1)
         next_id = self.path_to_target_nodes[
             min(ids[0][0] + 4, len(self.path_to_target) - 1)
         ].id
@@ -555,7 +559,7 @@ class MazeGraph:
         # Pass the image to sift detector and get keypoints + descriptions
         # Again we only need the descriptors
         _, des = sift.detectAndCompute(img, None)
-        des=des.astype(np.float64)
+        des = des.astype(np.float64)
         # We then predict the cluster labels using the pre-trained codebook
         # Each descriptor is assigned to a cluster, and the predicted cluster label is returned
         pred_labels = self.codebook.predict(des)
@@ -618,7 +622,8 @@ class MazeGraph:
 if __name__ == "__main__":
 
     m = MazeGraph()
-    # img = cv2.imread("data/midterm_data/images/image_5475.png")
-    # m.init_navigation(img)
+    img = cv2.imread("data/final_maze_1/images/image_2000.png")
+    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    m.init_navigation(img)
     # m.loop_detection()
     # print(m.match_and_check_epipolar_geometry(6852, 288))
